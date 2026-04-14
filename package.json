@@ -1,7 +1,7 @@
 {
   "name": "bravo-kanban-bot",
   "version": "1.0.0",
-  "description": "GitHub App bot for bravo-kanban organization — Kanban guardian, routing, and automation",
+  "description": "GitHub App bot for bravo-kanban organization \u2014 Kanban guardian, routing, and automation",
   "type": "module",
   "engines": {
     "node": ">=20.0.0"
@@ -14,7 +14,8 @@
     "@octokit/app": "^15.1.1",
     "@octokit/graphql": "^8.1.2",
     "@octokit/rest": "^21.0.2",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "dotenv": "^16.4.5"
   },
   "license": "MIT"
 }

@@ -3,6 +3,10 @@
  */
 
 import { readFileSync } from 'fs';
+import { config as dotenvConfig } from 'dotenv';
+
+// Load .env from project root
+dotenvConfig();
 
 // ─── Environment ──────────────────────────────────────────────────────────────
 

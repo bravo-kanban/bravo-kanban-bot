@@ -4,51 +4,122 @@
  * Uses awstore.cloud by default (Claude Sonnet 4.5).
  * Also supports OpenRouter or any OpenAI-compatible endpoint.
  * Never crashes the calling code — returns null on any failure.
+ *
+ * Features:
+ * - Request queue with concurrency limit (max 2 parallel requests)
+ * - Retry with exponential backoff (3 attempts, 2s → 4s → 8s)
+ * - Automatic retry on 429, 502, 503, 504 errors
  */
 
 import { AI_API_KEY, AI_BASE_URL, AI_MODEL, AI_MODEL_FALLBACK } from './config.js';
 
+// ─── Queue with concurrency limit ───────────────────────────────────────────
+
+const MAX_CONCURRENCY = 2;
+const MAX_RETRIES = 3;
+const BASE_DELAY_MS = 2000;
+
+let activeRequests = 0;
+const pendingQueue = [];
+
+function enqueue(fn) {
+  return new Promise((resolve, reject) => {
+    pendingQueue.push({ fn, resolve, reject });
+    processQueue();
+  });
+}
+
+function processQueue() {
+  while (activeRequests < MAX_CONCURRENCY && pendingQueue.length > 0) {
+    const { fn, resolve, reject } = pendingQueue.shift();
+    activeRequests++;
+    fn()
+      .then(resolve)
+      .catch(reject)
+      .finally(() => {
+        activeRequests--;
+        processQueue();
+      });
+  }
+}
+
+// ─── Retry logic ────────────────────────────────────────────────────────────
+
+const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 /**
- * Call AI model via OpenAI-compatible API. Returns parsed content string or null.
+ * Call AI model via OpenAI-compatible API with retry.
  * @param {string} model
  * @param {Array<{role:string, content:string}>} messages
  * @param {object} [opts]
  * @param {number} [opts.maxTokens]
  * @param {number} [opts.temperature]
- * @returns {Promise<string|null>}
+ * @returns {Promise<string>}
  */
-async function callModel(model, messages, opts = {}) {
+async function callModelWithRetry(model, messages, opts = {}) {
   const { maxTokens = 1024, temperature = 0.3 } = opts;
-
   const url = `${AI_BASE_URL}/v1/chat/completions`;
+  const body = JSON.stringify({ model, messages, max_tokens: maxTokens, temperature });
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${AI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-      max_tokens: maxTokens,
-      temperature,
-    }),
-  });
+  let lastError;
 
-  if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`AI API HTTP ${response.status}: ${text.slice(0, 200)}`);
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${AI_API_KEY}`,
+        },
+        body,
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const content = data?.choices?.[0]?.message?.content;
+        if (!content) throw new Error('Empty response from AI');
+        return content;
+      }
+
+      const status = response.status;
+      const text = await response.text().catch(() => '');
+      lastError = new Error(`AI API HTTP ${status}: ${text.slice(0, 200)}`);
+
+      // Only retry on transient errors
+      if (!RETRYABLE_STATUSES.has(status)) {
+        throw lastError;
+      }
+
+      // Exponential backoff: 2s, 4s, 8s
+      const delayMs = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+      console.warn(`[llm] Attempt ${attempt}/${MAX_RETRIES} failed (HTTP ${status}), retrying in ${delayMs}ms...`);
+      await sleep(delayMs);
+    } catch (err) {
+      lastError = err;
+      if (err.message?.includes('AI API HTTP') && attempt < MAX_RETRIES) {
+        // Already logged above for retryable, just continue
+        continue;
+      }
+      if (attempt < MAX_RETRIES && (err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT' || err.code === 'ENOTFOUND')) {
+        const delayMs = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        console.warn(`[llm] Attempt ${attempt}/${MAX_RETRIES} failed (${err.code}), retrying in ${delayMs}ms...`);
+        await sleep(delayMs);
+        continue;
+      }
+      throw err;
+    }
   }
 
-  const data = await response.json();
-  const content = data?.choices?.[0]?.message?.content;
-  if (!content) throw new Error('Empty response from AI');
-  return content;
+  throw lastError;
 }
 
 /**
  * Call LLM with primary model, fallback to secondary on failure.
+ * All calls go through the concurrency-limited queue.
  * Returns null if both models fail or no API key is configured.
  *
  * @param {Array<{role:string, content:string}>} messages
@@ -61,13 +132,13 @@ export async function callLLM(messages, opts = {}) {
   }
 
   try {
-    const result = await callModel(AI_MODEL, messages, opts);
+    const result = await enqueue(() => callModelWithRetry(AI_MODEL, messages, opts));
     return result;
   } catch (primaryErr) {
-    console.warn(`[llm] Primary model (${AI_MODEL}) failed: ${primaryErr.message}`);
+    console.warn(`[llm] Primary model (${AI_MODEL}) failed after retries: ${primaryErr.message}`);
     if (AI_MODEL_FALLBACK && AI_MODEL_FALLBACK !== AI_MODEL) {
       try {
-        const result = await callModel(AI_MODEL_FALLBACK, messages, opts);
+        const result = await enqueue(() => callModelWithRetry(AI_MODEL_FALLBACK, messages, opts));
         return result;
       } catch (fallbackErr) {
         console.error(`[llm] Fallback model also failed: ${fallbackErr.message}`);

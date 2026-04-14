@@ -3,10 +3,13 @@
  */
 
 import { readFileSync } from 'fs';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { config as dotenvConfig } from 'dotenv';
 
-// Load .env from project root
-dotenvConfig();
+// Load .env from project root (resolve relative to this file, not cwd)
+const __dirname = dirname(fileURLToPath(import.meta.url));
+dotenvConfig({ path: resolve(__dirname, '..', '.env') });
 
 // ─── Environment ──────────────────────────────────────────────────────────────
 

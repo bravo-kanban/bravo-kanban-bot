@@ -21,7 +21,7 @@ export const WIP_LIMIT = parseInt(process.env.WIP_LIMIT || '3', 10);
 export const PROJECT_ID = process.env.PROJECT_ID || 'PVT_kwDOEGF_kM4BUKVd';
 export const STATUS_FIELD_ID = process.env.STATUS_FIELD_ID || 'PVTSSF_lADOEGF_kM4BUKVdzhBUXxk';
 
-export const GUARDIAN_REPOS = (process.env.GUARDIAN_REPOS || 'sur-tasks,sur-bravo,fd-tasks')
+export const GUARDIAN_REPOS = (process.env.GUARDIAN_REPOS || 'sur-tasks,fd-tasks')
   .split(',')
   .map((r) => r.trim())
   .filter(Boolean);

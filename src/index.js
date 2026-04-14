@@ -7,7 +7,6 @@
 import express from 'express';
 import crypto from 'crypto';
 import { App } from '@octokit/app';
-import { graphql } from '@octokit/graphql';
 
 import {
   PORT,
@@ -64,20 +63,14 @@ async function getOctokitForInstallation(installationId) {
 
 /**
  * Create an authenticated graphql function for a given installation.
+ * Uses the built-in octokit.graphql which is already authenticated
+ * via the installation token from @octokit/app.
  * @param {number} installationId
  * @returns {Promise<Function>}
  */
 async function getGraphqlForInstallation(installationId) {
-  // Get installation token
-  const { data: token } = await (
-    await app.getInstallationOctokit(installationId)
-  ).rest.apps.createInstallationAccessToken({ installation_id: installationId });
-
-  return graphql.defaults({
-    headers: {
-      authorization: `token ${token.token}`,
-    },
-  });
+  const octokit = await app.getInstallationOctokit(installationId);
+  return octokit.graphql;
 }
 
 // ─── Derive current project status from issue/payload ────────────────────────
@@ -292,12 +285,12 @@ async function bootstrap() {
 
     if (installation) {
       const octokit = await app.getInstallationOctokit(installation.id);
-      const config = await fetchProjectConfig(octokit, GITHUB_ORG, 'sur-bravo');
+      const config = await fetchProjectConfig(octokit, GITHUB_ORG, 'sur-tasks');
       if (config) {
         setProjectConfig(config);
-        console.log('[boot] PROJECT.json loaded from sur-bravo');
+        console.log('[boot] PROJECT.json loaded from sur-tasks');
       } else {
-        console.warn('[boot] PROJECT.json not found in sur-bravo — using defaults');
+        console.warn('[boot] PROJECT.json not found in sur-tasks — using defaults');
       }
     }
   } catch (err) {

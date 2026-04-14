@@ -60,6 +60,8 @@ function sleep(ms) {
  * @param {number} [opts.temperature]
  * @returns {Promise<string>}
  */
+const REQUEST_TIMEOUT_MS = 90_000; // 90 seconds — awstore with extended thinking can be slow
+
 async function callModelWithRetry(model, messages, opts = {}) {
   const { maxTokens = 1024, temperature = 0.3 } = opts;
   const url = `${AI_BASE_URL}/v1/chat/completions`;
@@ -76,6 +78,7 @@ async function callModelWithRetry(model, messages, opts = {}) {
           Authorization: `Bearer ${AI_API_KEY}`,
         },
         body,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
 
       if (response.ok) {
@@ -104,9 +107,9 @@ async function callModelWithRetry(model, messages, opts = {}) {
         // Already logged above for retryable, just continue
         continue;
       }
-      if (attempt < MAX_RETRIES && (err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT' || err.code === 'ENOTFOUND')) {
+      if (attempt < MAX_RETRIES && (err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT' || err.code === 'ENOTFOUND' || err.name === 'TimeoutError' || err.name === 'AbortError')) {
         const delayMs = BASE_DELAY_MS * Math.pow(2, attempt - 1);
-        console.warn(`[llm] Attempt ${attempt}/${MAX_RETRIES} failed (${err.code}), retrying in ${delayMs}ms...`);
+        console.warn(`[llm] Attempt ${attempt}/${MAX_RETRIES} failed (${err.code || err.name}), retrying in ${delayMs}ms...`);
         await sleep(delayMs);
         continue;
       }

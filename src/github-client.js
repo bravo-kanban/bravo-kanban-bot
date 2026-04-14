@@ -72,25 +72,50 @@ export async function upsertBotComment(octokit, owner, repo, issueNumber, marker
 }
 
 /**
- * Post a regular comment (no upsert).
+ * Post a regular comment (no upsert). Returns the created comment data.
  * @param {import('@octokit/rest').Octokit} octokit
  * @param {string} owner
  * @param {string} repo
  * @param {number} issueNumber
  * @param {string} body
- * @returns {Promise<void>}
+ * @returns {Promise<{id: number}|null>}
  */
 export async function postComment(octokit, owner, repo, issueNumber, body) {
   try {
-    await octokit.rest.issues.createComment({
+    const { data } = await octokit.rest.issues.createComment({
       owner,
       repo,
       issue_number: issueNumber,
       body,
     });
-    console.log(`[github] Posted comment on ${owner}/${repo}#${issueNumber}`);
+    console.log(`[github] Posted comment ${data.id} on ${owner}/${repo}#${issueNumber}`);
+    return data;
   } catch (err) {
     console.error(`[github] postComment error: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Update an existing comment by ID.
+ * @param {import('@octokit/rest').Octokit} octokit
+ * @param {string} owner
+ * @param {string} repo
+ * @param {number} commentId
+ * @param {string} body
+ * @returns {Promise<void>}
+ */
+export async function updateComment(octokit, owner, repo, commentId, body) {
+  try {
+    await octokit.rest.issues.updateComment({
+      owner,
+      repo,
+      comment_id: commentId,
+      body,
+    });
+    console.log(`[github] Updated comment ${commentId} on ${owner}/${repo}`);
+  } catch (err) {
+    console.error(`[github] updateComment error: ${err.message}`);
   }
 }
 

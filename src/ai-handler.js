@@ -6,7 +6,7 @@
 
 import { nowMoscow } from './config.js';
 import { analyzeIssueLLM } from './llm-client.js';
-import { upsertBotComment } from './github-client.js';
+import { postComment, updateComment } from './github-client.js';
 
 const AI_MARKER = '<!-- ai-analysis -->';
 
@@ -95,11 +95,12 @@ export async function handleAI(octokit, { owner, repo, issueNumber, issue }) {
 
     console.log(`[ai] Analyzing ${owner}/${repo}#${issueNumber}`);
 
-    // Post "thinking" comment
-    await upsertBotComment(
-      octokit, owner, repo, issueNumber, AI_MARKER,
+    // Post "thinking" comment (new comment every time)
+    const thinkingComment = await postComment(
+      octokit, owner, repo, issueNumber,
       `${AI_MARKER}\n## 🤖 AI думает...\n\nАнализирую задачу. Это может занять до 60 секунд.`,
     );
+    const thinkingId = thinkingComment?.id;
 
     // Try LLM analysis
     let analysis = null;
@@ -116,13 +117,17 @@ export async function handleAI(octokit, { owner, repo, issueNumber, issue }) {
     const commentBody = `${AI_MARKER}\n## 🤖 AI-анализ задачи\n\n*Проверено: ${nowMoscow()}*\n\n| Параметр | Значение |\n|---|---|\n| 🎯 Приоритет | ${priorityBadge(priority)} |\n| 🏷️ Тип | ${typeBadge(type)} |\n| 📊 Сложность | ${complexityBadge(complexity)} |\n\n### 📝 Резюме\n${summary}\n\n---\n*Анализ выполнен автоматически. Для повторного анализа напишите \`/ai\` или \`@ai\` в комментарии.*`;
 
     // Replace "thinking" with result
-    await upsertBotComment(octokit, owner, repo, issueNumber, AI_MARKER, commentBody);
+    if (thinkingId) {
+      await updateComment(octokit, owner, repo, thinkingId, commentBody);
+    } else {
+      await postComment(octokit, owner, repo, issueNumber, commentBody);
+    }
     console.log(`[ai] Posted analysis for ${owner}/${repo}#${issueNumber}`);
   } catch (err) {
     console.error(`[ai] handleAI error: ${err.message}`);
     try {
-      await upsertBotComment(
-        octokit, owner, repo, issueNumber, AI_MARKER,
+      await postComment(
+        octokit, owner, repo, issueNumber,
         `${AI_MARKER}\n## ❌ Ошибка AI-анализа\n\n${err.message}`,
       );
     } catch {

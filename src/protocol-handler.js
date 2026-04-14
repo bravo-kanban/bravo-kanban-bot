@@ -210,7 +210,7 @@ export async function handleProtocol(octokit, { owner, repo, issueNumber, issue,
         owner,
         repo,
         issueNumber,
-        `${RESULT_MARKER}\n## ⚠️ Задачи не найдены\n\nНе удалось извлечь конкретные задачи из протокола. Проверьте, что текст содержит action items с указанием ответственных.`,
+        `${RESULT_MARKER}\n## ⚠️ Задачи не найдены\n\nНе удалось извлечь задачи. Возможные причины:\n- AI не ответил (таймаут awstore)\n- Текст не содержит action items\n\nПопробуйте снять и заново добавить label "Протокол". См. логи PM2 для деталей.`,
       );
       return;
     }

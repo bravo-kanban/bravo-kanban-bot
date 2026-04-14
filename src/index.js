@@ -18,6 +18,9 @@ import {
   GUARDIAN_REPOS,
   INSTALLATION_ID,
   PROJECT_ID,
+  AI_API_KEY,
+  AI_BASE_URL,
+  AI_MODEL,
   setProjectConfig,
 } from './config.js';
 
@@ -465,6 +468,11 @@ async function bootstrap() {
     console.log(`[boot] Webhook endpoint: POST /github-app`);
     console.log(`[boot] Health check:     GET  /health`);
     console.log(`[boot] Org: ${GITHUB_ORG} | Repos: ${GUARDIAN_REPOS.join(', ')}`);
+    if (AI_API_KEY) {
+      console.log(`[boot] AI: ${AI_BASE_URL} | Model: ${AI_MODEL} | Key: ${AI_API_KEY.slice(0, 8)}…`);
+    } else {
+      console.error('[boot] ⚠️ AI_API_KEY is NOT set — protocol parsing and AI checks will not work!');
+    }
   });
 }
 

@@ -131,6 +131,7 @@ async function callModelWithRetry(model, messages, opts = {}) {
  */
 export async function callLLM(messages, opts = {}) {
   if (!AI_API_KEY) {
+    console.error('[llm] AI_API_KEY is not set — skipping AI call. Set AI_API_KEY env variable.');
     return null;
   }
 

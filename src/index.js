@@ -7,6 +7,7 @@
 import express from 'express';
 import crypto from 'crypto';
 import { App } from '@octokit/app';
+import { Octokit } from '@octokit/rest';
 
 import {
   PORT,
@@ -36,6 +37,7 @@ if (!APP_ID || !PRIVATE_KEY || !WEBHOOK_SECRET) {
 const app = new App({
   appId: APP_ID,
   privateKey: PRIVATE_KEY,
+  Octokit: Octokit,
   webhooks: {
     secret: WEBHOOK_SECRET,
   },

@@ -17,13 +17,14 @@ import {
   GITHUB_ORG,
   GUARDIAN_REPOS,
   INSTALLATION_ID,
+  PROJECT_ID,
   setProjectConfig,
 } from './config.js';
 
 import { runGuardian, isGuardianTrigger } from './guardian.js';
 import { handleMove, parseMoveCommand } from './move-handler.js';
 import { handleAI, isAICommand } from './ai-handler.js';
-import { fetchProjectConfig, getIssueComments, getIssue } from './github-client.js';
+import { fetchProjectConfig, getIssueComments, getIssue, getProjectItemForIssue } from './github-client.js';
 
 // ─── App initialization ───────────────────────────────────────────────────────
 
@@ -76,45 +77,45 @@ async function getGraphqlForInstallation(installationId) {
   return octokit.graphql;
 }
 
-// ─── Derive current project status from issue/payload ────────────────────────
+// ─── Get real project status via GraphQL ─────────────────────────────────
 
 /**
- * Try to extract the current project status from a webhook payload.
- * GitHub Projects V2 events don't always include status in issue webhooks,
- * so we fall back to labels.
- * @param {object} issue
- * @returns {string}
+ * Fetch the real project status for an issue from GitHub Projects V2.
+ * Uses getProjectItemForIssue which queries the project's field values.
+ * Falls back to 'Backlog' if project item not found.
+ * @param {Function} graphqlFn
+ * @param {string} owner
+ * @param {string} repo
+ * @param {number} issueNumber
+ * @returns {Promise<string>}
  */
-function extractCurrentStatus(issue) {
-  const labels = (issue.labels || []).map((l) => (typeof l === 'string' ? l : l.name || ''));
-  for (const label of labels) {
-    const lower = label.toLowerCase();
-    if (lower.includes('backlog')) return 'Backlog';
-    if (lower.includes('to do') || lower.includes('todo')) return 'To Do';
-    if (lower.includes('in progress')) return 'In Progress';
-    if (lower.includes('review')) return 'Review';
-    if (lower.includes('done')) return 'Done';
+async function getProjectStatus(graphqlFn, owner, repo, issueNumber) {
+  try {
+    const { currentStatus } = await getProjectItemForIssue(graphqlFn, PROJECT_ID, owner, repo, issueNumber);
+    return currentStatus || 'Backlog';
+  } catch (err) {
+    console.warn(`[webhook] Could not fetch project status for #${issueNumber}: ${err.message}`);
+    return 'Backlog';
   }
-  return 'Backlog';
 }
 
 // ─── Webhook event handlers ───────────────────────────────────────────────────
 
 async function handleIssueOpened(payload, octokit, graphqlFn) {
-  const { issue, repository, installation } = payload;
+  const { issue, repository } = payload;
   const owner = repository.owner.login;
   const repo = repository.name;
   const issueNumber = issue.number;
 
   const comments = await getIssueComments(octokit, owner, repo, issueNumber);
-  const currentStatus = extractCurrentStatus(issue);
+  const projectStatus = await getProjectStatus(graphqlFn, owner, repo, issueNumber);
 
   await runGuardian(octokit, {
     owner,
     repo,
     issueNumber,
     issue,
-    projectStatus: currentStatus,
+    projectStatus,
     comments,
     graphqlFn,
   });
@@ -127,14 +128,14 @@ async function handleIssueEdited(payload, octokit, graphqlFn) {
   const issueNumber = issue.number;
 
   const comments = await getIssueComments(octokit, owner, repo, issueNumber);
-  const currentStatus = extractCurrentStatus(issue);
+  const projectStatus = await getProjectStatus(graphqlFn, owner, repo, issueNumber);
 
   await runGuardian(octokit, {
     owner,
     repo,
     issueNumber,
     issue,
-    projectStatus: currentStatus,
+    projectStatus,
     comments,
     graphqlFn,
   });
@@ -151,7 +152,7 @@ async function handleIssueCommentCreated(payload, octokit, graphqlFn) {
   // Skip bot's own comments
   if (comment.user?.type === 'Bot') return;
 
-  const currentStatus = extractCurrentStatus(issue);
+  const projectStatus = await getProjectStatus(graphqlFn, owner, repo, issueNumber);
 
   // Check for /move command first
   const moveTarget = parseMoveCommand(commentBody);
@@ -163,7 +164,7 @@ async function handleIssueCommentCreated(payload, octokit, graphqlFn) {
       issue,
       commentBody,
       commenterLogin,
-      currentStatus,
+      currentStatus: projectStatus,
     });
     return; // Don't run guardian after move — it'll run on next open/edit
   }
@@ -178,7 +179,7 @@ async function handleIssueCommentCreated(payload, octokit, graphqlFn) {
       repo,
       issueNumber,
       issue,
-      projectStatus: currentStatus,
+      projectStatus,
       comments,
       graphqlFn,
     });
@@ -193,7 +194,7 @@ async function handleIssueCommentCreated(payload, octokit, graphqlFn) {
       repo,
       issueNumber,
       issue,
-      projectStatus: currentStatus,
+      projectStatus,
       comments,
       graphqlFn,
     });
@@ -211,6 +212,7 @@ async function handleProjectItemEvent(payload, octokit, graphqlFn) {
   try {
     const contentNodeId = payload.projects_v2_item?.content_node_id;
     const contentType = payload.projects_v2_item?.content_type;
+    const projectItemNodeId = payload.projects_v2_item?.node_id;
 
     // Only process Issue items (not DraftIssue or PullRequest)
     if (contentType !== 'Issue' || !contentNodeId) {
@@ -218,15 +220,16 @@ async function handleProjectItemEvent(payload, octokit, graphqlFn) {
       return;
     }
 
-    // Fetch the issue details via GraphQL using node ID
+    // Single GraphQL query: fetch issue details + project item status
     const query = `
-      query($nodeId: ID!) {
-        node(id: $nodeId) {
+      query($issueNodeId: ID!, $itemNodeId: ID!) {
+        issue: node(id: $issueNodeId) {
           ... on Issue {
             number
             title
             body
             state
+            updatedAt
             labels(first: 20) { nodes { name } }
             assignees(first: 10) { nodes { login } }
             repository {
@@ -235,11 +238,32 @@ async function handleProjectItemEvent(payload, octokit, graphqlFn) {
             }
           }
         }
+        projectItem: node(id: $itemNodeId) {
+          ... on ProjectV2Item {
+            fieldValues(first: 20) {
+              nodes {
+                ... on ProjectV2ItemFieldSingleSelectValue {
+                  name
+                  field {
+                    ... on ProjectV2SingleSelectField {
+                      name
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     `;
 
-    const result = await graphqlFn(query, { nodeId: contentNodeId });
-    const issueData = result?.node;
+    const result = await graphqlFn(query, {
+      issueNodeId: contentNodeId,
+      itemNodeId: projectItemNodeId,
+    });
+
+    const issueData = result?.issue;
+    const projectItemData = result?.projectItem;
 
     if (!issueData || !issueData.repository) {
       console.warn('[webhook] projects_v2_item: could not fetch linked issue');
@@ -256,7 +280,14 @@ async function handleProjectItemEvent(payload, octokit, graphqlFn) {
       return;
     }
 
-    console.log(`[webhook] projects_v2_item.${payload.action}: processing ${owner}/${repo}#${issueNumber}`);
+    // Extract real status from project item field values
+    const fieldValues = projectItemData?.fieldValues?.nodes || [];
+    const statusField = fieldValues.find(
+      (fv) => fv?.field?.name?.toLowerCase().includes('status'),
+    );
+    const projectStatus = statusField?.name || 'Backlog';
+
+    console.log(`[webhook] projects_v2_item.${payload.action}: processing ${owner}/${repo}#${issueNumber} (status: ${projectStatus})`);
 
     // Build issue object compatible with Guardian
     const issue = {
@@ -264,19 +295,19 @@ async function handleProjectItemEvent(payload, octokit, graphqlFn) {
       title: issueData.title,
       body: issueData.body || '',
       state: issueData.state,
+      updated_at: issueData.updatedAt,
       labels: (issueData.labels?.nodes || []).map((l) => ({ name: l.name })),
       assignees: (issueData.assignees?.nodes || []).map((a) => ({ login: a.login })),
     };
 
     const comments = await getIssueComments(octokit, owner, repo, issueNumber);
-    const currentStatus = extractCurrentStatus(issue);
 
     await runGuardian(octokit, {
       owner,
       repo,
       issueNumber,
       issue,
-      projectStatus: currentStatus,
+      projectStatus,
       comments,
       graphqlFn,
     });

@@ -116,6 +116,7 @@ async function handleIssueOpened(payload, octokit, graphqlFn) {
     issue,
     projectStatus: currentStatus,
     comments,
+    graphqlFn,
   });
 }
 
@@ -135,6 +136,7 @@ async function handleIssueEdited(payload, octokit, graphqlFn) {
     issue,
     projectStatus: currentStatus,
     comments,
+    graphqlFn,
   });
 }
 
@@ -178,6 +180,7 @@ async function handleIssueCommentCreated(payload, octokit, graphqlFn) {
       issue,
       projectStatus: currentStatus,
       comments,
+      graphqlFn,
     });
     return;
   }
@@ -192,6 +195,7 @@ async function handleIssueCommentCreated(payload, octokit, graphqlFn) {
       issue,
       projectStatus: currentStatus,
       comments,
+      graphqlFn,
     });
   }
 }
@@ -274,6 +278,7 @@ async function handleProjectItemEvent(payload, octokit, graphqlFn) {
       issue,
       projectStatus: currentStatus,
       comments,
+      graphqlFn,
     });
   } catch (err) {
     console.error(`[webhook] handleProjectItemEvent error: ${err.message}`, err.stack);

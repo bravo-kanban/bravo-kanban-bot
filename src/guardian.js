@@ -15,10 +15,17 @@ import {
   GUARDIAN_REPOS,
   GITHUB_ORG,
   STATUS_FORWARD_ORDER,
+  PROJECT_ID,
+  STATUS_FIELD_ID,
   nowMoscow,
 } from './config.js';
-import { upsertBotComment } from './github-client.js';
-import { countInProgressForAssignee } from './github-client.js';
+import {
+  upsertBotComment,
+  countInProgressForAssignee,
+  getProjectItemForIssue,
+  getStatusFieldOptions,
+  updateProjectItemStatus,
+} from './github-client.js';
 import {
   checkAtomicityLLM,
   checkSmartLLM,
@@ -375,8 +382,9 @@ function fmtStatus(result) {
  * @param {object} params.issue — full issue object
  * @param {string} [params.projectStatus] — current project status column name
  * @param {Array} params.comments — existing comments
+ * @param {Function} [params.graphqlFn] — authenticated graphql function for project mutations
  */
-export async function runGuardian(octokit, { owner, repo, issueNumber, issue, projectStatus, comments }) {
+export async function runGuardian(octokit, { owner, repo, issueNumber, issue, projectStatus, comments, graphqlFn }) {
   try {
     const status = normalizeStatus(projectStatus || '');
     const title = issue.title || '';
@@ -471,6 +479,26 @@ ${routingBlock}
 `;
 
     await upsertBotComment(octokit, owner, repo, issueNumber, MARKER, commentBody);
+
+    // If BLOCKED and not already in Backlog, move back to Backlog
+    if (blockingFails.length > 0 && status !== 'Backlog' && graphqlFn) {
+      try {
+        const { itemId } = await getProjectItemForIssue(graphqlFn, PROJECT_ID, owner, repo, issueNumber);
+        if (itemId) {
+          const options = await getStatusFieldOptions(graphqlFn, PROJECT_ID, STATUS_FIELD_ID);
+          const backlogOption = options.find((o) => o.name.toLowerCase().includes('backlog'));
+          if (backlogOption) {
+            const moved = await updateProjectItemStatus(graphqlFn, PROJECT_ID, itemId, STATUS_FIELD_ID, backlogOption.id);
+            if (moved) {
+              console.log(`[guardian] Moved ${owner}/${repo}#${issueNumber} back to Backlog`);
+            }
+          }
+        }
+      } catch (moveErr) {
+        console.warn(`[guardian] Could not move to Backlog: ${moveErr.message}`);
+      }
+    }
+
     console.log(`[guardian] Done. Verdict: ${verdict}`);
   } catch (err) {
     console.error(`[guardian] runGuardian error: ${err.message}`);

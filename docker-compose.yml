@@ -1,0 +1,36 @@
+version: '3.9'
+
+services:
+  bot:
+    build:
+      context: .
+      target: production
+    container_name: bravo-kanban-bot
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - APP_ID=${APP_ID}
+      - PRIVATE_KEY_PATH=/app/private-key.pem
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - GITHUB_ORG=${GITHUB_ORG:-bravo-kanban}
+      - GUARDIAN_REPOS=${GUARDIAN_REPOS:-sur-tasks,sur-bravo,fd-tasks}
+      - WIP_LIMIT=${WIP_LIMIT:-3}
+      - PROJECT_ID=${PROJECT_ID:-PVT_kwDOEGF_kM4BUKVd}
+      - STATUS_FIELD_ID=${STATUS_FIELD_ID:-PVTSSF_lADOEGF_kM4BUKVdzhBUXxk}
+    volumes:
+      - ./private-key.pem:/app/private-key.pem:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s

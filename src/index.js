@@ -202,6 +202,31 @@ async function handleIssueCommentCreated(payload, octokit, graphqlFn) {
   }
 }
 
+// ─── Debounce for project item events ────────────────────────────────────────
+
+// Prevents duplicate Guardian runs when multiple project events fire in quick succession
+// (e.g. Guardian moves card to Backlog → GitHub fires projects_v2_item.edited → loop)
+const recentGuardianRuns = new Map(); // key: "owner/repo#number" → timestamp
+const DEBOUNCE_MS = 15_000; // 15 seconds
+
+function shouldSkipDebounce(owner, repo, issueNumber) {
+  const key = `${owner}/${repo}#${issueNumber}`;
+  const lastRun = recentGuardianRuns.get(key);
+  const now = Date.now();
+  if (lastRun && now - lastRun < DEBOUNCE_MS) {
+    console.log(`[webhook] Debounce: skipping Guardian for ${key} (ran ${now - lastRun}ms ago)`);
+    return true;
+  }
+  recentGuardianRuns.set(key, now);
+  // Cleanup old entries every 100 runs
+  if (recentGuardianRuns.size > 100) {
+    for (const [k, v] of recentGuardianRuns) {
+      if (now - v > 60_000) recentGuardianRuns.delete(k);
+    }
+  }
+  return false;
+}
+
 // ─── projects_v2_item handler ───────────────────────────────────────────────
 
 /**
@@ -289,6 +314,11 @@ async function handleProjectItemEvent(payload, octokit, graphqlFn) {
     const projectStatus = statusField?.name || 'Backlog';
 
     console.log(`[webhook] projects_v2_item.${payload.action}: processing ${owner}/${repo}#${issueNumber} (status: ${projectStatus})`);
+
+    // Debounce: skip if Guardian just ran on this issue (prevents loops)
+    if (shouldSkipDebounce(owner, repo, issueNumber)) {
+      return;
+    }
 
     // Build issue object compatible with Guardian
     const issue = {

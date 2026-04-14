@@ -143,11 +143,11 @@ ${summary}
 }
 
 /**
- * Check if a comment contains the /ai command.
+ * Check if a comment contains the /ai or @ai command.
  * @param {string} body
  * @returns {boolean}
  */
 export function isAICommand(body) {
   if (!body) return false;
-  return /\/ai\b/i.test(body);
+  return /[\/\@]ai\b/i.test(body);
 }

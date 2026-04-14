@@ -1,14 +1,15 @@
 /**
- * llm-client.js — OpenRouter LLM integration
+ * llm-client.js — AI integration (awstore / OpenAI-compatible API)
  *
- * Provides a resilient LLM call with primary/fallback model support.
+ * Uses awstore.cloud by default (Claude Sonnet 4.5).
+ * Also supports OpenRouter or any OpenAI-compatible endpoint.
  * Never crashes the calling code — returns null on any failure.
  */
 
-import { OPENROUTER_API_KEY, OPENROUTER_API_URL, LLM_MODELS } from './config.js';
+import { AI_API_KEY, AI_BASE_URL, AI_MODEL, AI_MODEL_FALLBACK } from './config.js';
 
 /**
- * Call OpenRouter with a given model. Returns parsed content string or null.
+ * Call AI model via OpenAI-compatible API. Returns parsed content string or null.
  * @param {string} model
  * @param {Array<{role:string, content:string}>} messages
  * @param {object} [opts]
@@ -19,13 +20,13 @@ import { OPENROUTER_API_KEY, OPENROUTER_API_URL, LLM_MODELS } from './config.js'
 async function callModel(model, messages, opts = {}) {
   const { maxTokens = 1024, temperature = 0.3 } = opts;
 
-  const response = await fetch(OPENROUTER_API_URL, {
+  const url = `${AI_BASE_URL}/v1/chat/completions`;
+
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-      'HTTP-Referer': 'https://github.com/bravo-kanban/bravo-kanban-bot',
-      'X-Title': 'bravo-kanban-bot',
+      Authorization: `Bearer ${AI_API_KEY}`,
     },
     body: JSON.stringify({
       model,
@@ -37,12 +38,12 @@ async function callModel(model, messages, opts = {}) {
 
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new Error(`OpenRouter HTTP ${response.status}: ${text}`);
+    throw new Error(`AI API HTTP ${response.status}: ${text.slice(0, 200)}`);
   }
 
   const data = await response.json();
   const content = data?.choices?.[0]?.message?.content;
-  if (!content) throw new Error('Empty response from LLM');
+  if (!content) throw new Error('Empty response from AI');
   return content;
 }
 
@@ -55,22 +56,40 @@ async function callModel(model, messages, opts = {}) {
  * @returns {Promise<string|null>}
  */
 export async function callLLM(messages, opts = {}) {
-  if (!OPENROUTER_API_KEY) {
+  if (!AI_API_KEY) {
     return null;
   }
 
   try {
-    const result = await callModel(LLM_MODELS.primary, messages, opts);
+    const result = await callModel(AI_MODEL, messages, opts);
     return result;
   } catch (primaryErr) {
-    console.warn(`[llm] Primary model failed: ${primaryErr.message}. Trying fallback...`);
-    try {
-      const result = await callModel(LLM_MODELS.fallback, messages, opts);
-      return result;
-    } catch (fallbackErr) {
-      console.error(`[llm] Fallback model also failed: ${fallbackErr.message}`);
-      return null;
+    console.warn(`[llm] Primary model (${AI_MODEL}) failed: ${primaryErr.message}`);
+    if (AI_MODEL_FALLBACK && AI_MODEL_FALLBACK !== AI_MODEL) {
+      try {
+        const result = await callModel(AI_MODEL_FALLBACK, messages, opts);
+        return result;
+      } catch (fallbackErr) {
+        console.error(`[llm] Fallback model also failed: ${fallbackErr.message}`);
+        return null;
+      }
     }
+    return null;
+  }
+}
+
+/**
+ * Parse JSON from LLM response (strips markdown fences if present).
+ * @param {string|null} raw
+ * @returns {object|null}
+ */
+function parseJSON(raw) {
+  if (!raw) return null;
+  try {
+    const cleaned = raw.replace(/```json|```/g, '').trim();
+    return JSON.parse(cleaned);
+  } catch {
+    return null;
   }
 }
 
@@ -99,13 +118,7 @@ export async function checkAtomicityLLM(title, body) {
   ];
 
   const raw = await callLLM(messages, { maxTokens: 200, temperature: 0.2 });
-  if (!raw) return null;
-  try {
-    const cleaned = raw.replace(/```json|```/g, '').trim();
-    return JSON.parse(cleaned);
-  } catch {
-    return null;
-  }
+  return parseJSON(raw);
 }
 
 /**
@@ -133,13 +146,7 @@ export async function checkSmartLLM(title, body) {
   ];
 
   const raw = await callLLM(messages, { maxTokens: 200, temperature: 0.2 });
-  if (!raw) return null;
-  try {
-    const cleaned = raw.replace(/```json|```/g, '').trim();
-    return JSON.parse(cleaned);
-  } catch {
-    return null;
-  }
+  return parseJSON(raw);
 }
 
 /**
@@ -165,13 +172,7 @@ export async function checkDoDLLM(body) {
   ];
 
   const raw = await callLLM(messages, { maxTokens: 200, temperature: 0.2 });
-  if (!raw) return null;
-  try {
-    const cleaned = raw.replace(/```json|```/g, '').trim();
-    return JSON.parse(cleaned);
-  } catch {
-    return null;
-  }
+  return parseJSON(raw);
 }
 
 /**
@@ -197,13 +198,7 @@ export async function checkInSystemLLM(body) {
   ];
 
   const raw = await callLLM(messages, { maxTokens: 200, temperature: 0.2 });
-  if (!raw) return null;
-  try {
-    const cleaned = raw.replace(/```json|```/g, '').trim();
-    return JSON.parse(cleaned);
-  } catch {
-    return null;
-  }
+  return parseJSON(raw);
 }
 
 /**
@@ -237,13 +232,7 @@ ${candidates.join('\n')}
   ];
 
   const raw = await callLLM(messages, { maxTokens: 300, temperature: 0.3 });
-  if (!raw) return null;
-  try {
-    const cleaned = raw.replace(/```json|```/g, '').trim();
-    return JSON.parse(cleaned);
-  } catch {
-    return null;
-  }
+  return parseJSON(raw);
 }
 
 /**
@@ -277,13 +266,7 @@ export async function analyzeIssueLLM(title, body) {
   ];
 
   const raw = await callLLM(messages, { maxTokens: 400, temperature: 0.3 });
-  if (!raw) return null;
-  try {
-    const cleaned = raw.replace(/```json|```/g, '').trim();
-    return JSON.parse(cleaned);
-  } catch {
-    return null;
-  }
+  return parseJSON(raw);
 }
 
 /**

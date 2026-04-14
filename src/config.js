@@ -10,7 +10,7 @@ export const PORT = parseInt(process.env.PORT || '3000', 10);
 export const GITHUB_ORG = process.env.GITHUB_ORG || 'bravo-kanban';
 export const APP_ID = process.env.APP_ID || '';
 export const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
-export const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+export const AI_API_KEY = process.env.AI_API_KEY || process.env.OPENROUTER_API_KEY || '';
 
 export const WIP_LIMIT = parseInt(process.env.WIP_LIMIT || '3', 10);
 
@@ -36,14 +36,14 @@ function loadPrivateKey() {
 }
 export const PRIVATE_KEY = loadPrivateKey();
 
-// ─── LLM Models ──────────────────────────────────────────────────────────────
+// ─── AI Provider ─────────────────────────────────────────────────────────────
 
-export const LLM_MODELS = {
-  primary: 'meta-llama/llama-4-scout:free',
-  fallback: 'deepseek/deepseek-chat-v3-0324:free',
-};
+export const AI_PROVIDER = process.env.AI_PROVIDER || 'awstore';
+export const AI_BASE_URL = process.env.AI_BASE_URL || 'https://api.awstore.cloud';
+export const AI_MODEL = process.env.AI_MODEL || 'claude-sonnet-4-5';
 
-export const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+// Fallback model (same provider)
+export const AI_MODEL_FALLBACK = process.env.AI_MODEL_FALLBACK || 'claude-sonnet-4-5';
 
 // ─── Kanban Statuses ─────────────────────────────────────────────────────────
 

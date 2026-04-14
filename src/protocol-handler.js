@@ -102,18 +102,19 @@ async function parseProtocolWithAI(title, body) {
   const messages = [
     {
       role: 'system',
-      content: `Ты парсер протоколов совещаний. Извлекай конкретные задачи (action items) из текста.
-Каждая задача должна иметь:
-- title: чёткий SMART-заголовок с глаголом (что сделать)
-- body: описание задачи с контекстом из протокола, сроком если указан
-- assignee_name: имя ответственного как указано в тексте (имя/фамилия)
+      content: `Ты парсер протоколов совещаний. Твоя задача — извлечь ВСЕ задачи (action items) из текста.
 
-НЕ создавай задачи из:
-- Общих обсуждений без конкретного действия
-- Информационных пунктов ("обсудили", "отметили")
-- Пунктов без ответственного
+Правила:
+1. Если в тексте упоминается действие (что-то нужно сделать) — это задача, извлеки её.
+2. Каждая задача:
+   - title: заголовок с глаголом ("Поправить текст кнопки", "Помыть окна в офисе")
+   - body: описание с контекстом из протокола
+   - assignee_name: имя ответственного как указано в тексте. Если не указан — пустая строка "".
+3. Извлекай задачи даже если текст выглядит как тест или черновик.
+4. НЕ пропускай задачи только из-за неформального стиля.
+5. Пропускай ТОЛЬКО чисто информационные фразы без какого-либо действия.
 
-Отвечай ТОЛЬКО валидным JSON-массивом. Без markdown.`,
+Отвечай СТРОГО валидным JSON-массивом. Никакого markdown, никакого текста до или после JSON.`,
     },
     {
       role: 'user',
@@ -122,23 +123,52 @@ async function parseProtocolWithAI(title, body) {
 Текст:
 ${body?.slice(0, 3000) || ''}
 
-Команда:
+Команда (для сопоставления имён):
 ${teamList}
 
-Верни JSON-массив задач: [{"title": "...", "body": "...", "assignee_name": "..."}]`,
+Верни JSON-массив: [{"title": "...", "body": "...", "assignee_name": "..."}]
+Если задач нет — верни пустой массив [].`,
     },
   ];
 
   const raw = await callLLM(messages, { maxTokens: 2000, temperature: 0.2 });
-  if (!raw) return [];
+  console.log('[protocol] AI raw response:', raw?.slice(0, 500) || '<null>');
+
+  if (!raw) {
+    console.error('[protocol] AI returned null — API call failed or empty response');
+    return [];
+  }
 
   try {
-    const cleaned = raw.replace(/```json|```/g, '').trim();
+    // Strip markdown fences, leading/trailing text
+    let cleaned = raw.replace(/```json\s*|```/g, '').trim();
+
+    // If AI wrapped in an object like {"tasks": [...]}, extract the array
     const parsed = JSON.parse(cleaned);
     if (Array.isArray(parsed)) return parsed;
+    if (parsed && typeof parsed === 'object') {
+      // Look for any array property (tasks, items, result, etc.)
+      const arrayProp = Object.values(parsed).find((v) => Array.isArray(v));
+      if (arrayProp) {
+        console.log(`[protocol] Extracted array from object wrapper (${arrayProp.length} items)`);
+        return arrayProp;
+      }
+    }
+    console.error('[protocol] Parsed value is not array or object with array:', typeof parsed);
     return [];
-  } catch {
-    console.error('[protocol] Failed to parse AI response:', raw?.slice(0, 200));
+  } catch (e) {
+    // Try to extract JSON array from surrounding text
+    const arrayMatch = raw.match(/\[\s*\{[\s\S]*\}\s*\]/);
+    if (arrayMatch) {
+      try {
+        const extracted = JSON.parse(arrayMatch[0]);
+        if (Array.isArray(extracted)) {
+          console.log(`[protocol] Extracted JSON array from text (${extracted.length} items)`);
+          return extracted;
+        }
+      } catch { /* fallthrough */ }
+    }
+    console.error('[protocol] Failed to parse AI response:', e.message, '| raw:', raw?.slice(0, 300));
     return [];
   }
 }

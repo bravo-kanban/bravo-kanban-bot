@@ -24,6 +24,7 @@ import {
 import { runGuardian, isGuardianTrigger } from './guardian.js';
 import { handleMove, parseMoveCommand } from './move-handler.js';
 import { handleAI, isAICommand } from './ai-handler.js';
+import { handleProtocol, isProtocolLabelAdded } from './protocol-handler.js';
 import { fetchProjectConfig, getIssueComments, getIssue, getProjectItemForIssue } from './github-client.js';
 
 // ─── App initialization ───────────────────────────────────────────────────────
@@ -370,7 +371,16 @@ server.post('/github-app', async (req, res) => {
       console.log(`[webhook] Event: ${event}, action: ${payload.action}`);
 
       if (event === 'issues') {
-        if (payload.action === 'opened' || payload.action === 'transferred') {
+        if (payload.action === 'labeled' && isProtocolLabelAdded(payload)) {
+          // Protocol label added — parse protocol and create issues
+          const { issue, repository } = payload;
+          await handleProtocol(octokit, {
+            owner: repository.owner.login,
+            repo: repository.name,
+            issueNumber: issue.number,
+            issue,
+          });
+        } else if (payload.action === 'opened' || payload.action === 'transferred') {
           await handleIssueOpened(payload, octokit, graphqlFn);
         } else if (payload.action === 'edited') {
           await handleIssueEdited(payload, octokit, graphqlFn);

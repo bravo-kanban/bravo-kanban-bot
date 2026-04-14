@@ -409,6 +409,7 @@ server.post('/github-app', async (req, res) => {
             repo: repository.name,
             issueNumber: issue.number,
             issue,
+            graphqlFn,
           });
         } else if (payload.action === 'opened' || payload.action === 'transferred') {
           await handleIssueOpened(payload, octokit, graphqlFn);

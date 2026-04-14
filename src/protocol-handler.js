@@ -6,9 +6,9 @@
  * then creates individual issues in the SAME repository.
  */
 
-import { TEAM_ROUTING, GITHUB_ORG, nowMoscow } from './config.js';
+import { TEAM_ROUTING, GITHUB_ORG, PROJECT_ID, STATUS_FIELD_ID, nowMoscow } from './config.js';
 import { callLLM } from './llm-client.js';
-import { postComment, addLabels } from './github-client.js';
+import { postComment, addLabels, getProjectItemForIssue, getStatusFieldOptions, updateProjectItemStatus } from './github-client.js';
 
 const PROCESSING_MARKER = '<!-- protocol-processing -->';
 const RESULT_MARKER = '<!-- protocol-result -->';
@@ -185,7 +185,7 @@ ${teamList}
  * @param {number} params.issueNumber
  * @param {object} params.issue
  */
-export async function handleProtocol(octokit, { owner, repo, issueNumber, issue }) {
+export async function handleProtocol(octokit, { owner, repo, issueNumber, issue, graphqlFn }) {
   try {
     const title = issue.title || '';
     const body = issue.body || '';
@@ -198,7 +198,7 @@ export async function handleProtocol(octokit, { owner, repo, issueNumber, issue 
       owner,
       repo,
       issueNumber,
-      `${PROCESSING_MARKER}\n## ⏳ Обрабатываю протокол...\n\nАнализирую текст и распределяю задачи. Это займёт 20-30 секунд.`,
+      `${PROCESSING_MARKER}\n## ⏳ Обрабатываю протокол...\n\nАнализирую текст и распределяю задачи. Это может занять до 60 секунд.`,
     );
 
     // Parse with AI
@@ -284,6 +284,30 @@ export async function handleProtocol(octokit, { owner, repo, issueNumber, issue 
 
     // Add "protocol: processed" label
     await addLabels(octokit, owner, repo, issueNumber, ['protocol: processed']);
+
+    // Close the protocol issue and move to Done
+    try {
+      await octokit.rest.issues.update({ owner, repo, issue_number: issueNumber, state: 'closed' });
+      console.log(`[protocol] Closed protocol issue #${issueNumber}`);
+    } catch (closeErr) {
+      console.warn(`[protocol] Could not close issue: ${closeErr.message}`);
+    }
+
+    if (graphqlFn) {
+      try {
+        const { itemId } = await getProjectItemForIssue(graphqlFn, PROJECT_ID, owner, repo, issueNumber);
+        if (itemId) {
+          const options = await getStatusFieldOptions(graphqlFn, PROJECT_ID, STATUS_FIELD_ID);
+          const doneOption = options.find((o) => o.name.toLowerCase().includes('done'));
+          if (doneOption) {
+            await updateProjectItemStatus(graphqlFn, PROJECT_ID, itemId, STATUS_FIELD_ID, doneOption.id);
+            console.log(`[protocol] Moved #${issueNumber} to Done`);
+          }
+        }
+      } catch (moveErr) {
+        console.warn(`[protocol] Could not move to Done: ${moveErr.message}`);
+      }
+    }
 
     console.log(`[protocol] Done. Created ${created.length}, failed ${failed.length}`);
   } catch (err) {

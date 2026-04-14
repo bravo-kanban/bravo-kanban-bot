@@ -15,7 +15,7 @@ import { AI_API_KEY, AI_BASE_URL, AI_MODEL, AI_MODEL_FALLBACK } from './config.j
 
 // ─── Queue with concurrency limit ───────────────────────────────────────────
 
-const MAX_CONCURRENCY = 2;
+const MAX_CONCURRENCY = 3;
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 2000;
 
@@ -136,6 +136,7 @@ export async function callLLM(messages, opts = {}) {
   }
 
   try {
+    console.log(`[llm] Calling ${AI_MODEL} (queue: ${pendingQueue.length} pending, ${activeRequests} active)`);
     const result = await enqueue(() => callModelWithRetry(AI_MODEL, messages, opts));
     return result;
   } catch (primaryErr) {

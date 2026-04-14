@@ -14,6 +14,7 @@ export const PORT = parseInt(process.env.PORT || '3000', 10);
 export const GITHUB_ORG = process.env.GITHUB_ORG || 'bravo-kanban';
 export const APP_ID = process.env.APP_ID || '';
 export const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
+export const INSTALLATION_ID = process.env.INSTALLATION_ID || '123630815';
 export const AI_API_KEY = process.env.AI_API_KEY || process.env.OPENROUTER_API_KEY || '';
 
 export const WIP_LIMIT = parseInt(process.env.WIP_LIMIT || '3', 10);

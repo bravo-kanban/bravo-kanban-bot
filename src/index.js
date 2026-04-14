@@ -15,13 +15,14 @@ import {
   WEBHOOK_SECRET,
   GITHUB_ORG,
   GUARDIAN_REPOS,
+  INSTALLATION_ID,
   setProjectConfig,
 } from './config.js';
 
 import { runGuardian, isGuardianTrigger } from './guardian.js';
 import { handleMove, parseMoveCommand } from './move-handler.js';
 import { handleAI, isAICommand } from './ai-handler.js';
-import { fetchProjectConfig, getIssueComments } from './github-client.js';
+import { fetchProjectConfig, getIssueComments, getIssue } from './github-client.js';
 
 // ─── App initialization ───────────────────────────────────────────────────────
 
@@ -193,6 +194,90 @@ async function handleIssueCommentCreated(payload, octokit, graphqlFn) {
   }
 }
 
+// ─── projects_v2_item handler ───────────────────────────────────────────────
+
+/**
+ * Handle projects_v2_item webhook events.
+ * These fire when an issue is added to a project or its field (e.g. Status) changes.
+ * We extract the linked issue and run Guardian on it.
+ */
+async function handleProjectItemEvent(payload, octokit, graphqlFn) {
+  try {
+    const contentNodeId = payload.projects_v2_item?.content_node_id;
+    const contentType = payload.projects_v2_item?.content_type;
+
+    // Only process Issue items (not DraftIssue or PullRequest)
+    if (contentType !== 'Issue' || !contentNodeId) {
+      console.log(`[webhook] projects_v2_item: content_type=${contentType}, skipping`);
+      return;
+    }
+
+    // Fetch the issue details via GraphQL using node ID
+    const query = `
+      query($nodeId: ID!) {
+        node(id: $nodeId) {
+          ... on Issue {
+            number
+            title
+            body
+            state
+            labels(first: 20) { nodes { name } }
+            assignees(first: 10) { nodes { login } }
+            repository {
+              name
+              owner { login }
+            }
+          }
+        }
+      }
+    `;
+
+    const result = await graphqlFn(query, { nodeId: contentNodeId });
+    const issueData = result?.node;
+
+    if (!issueData || !issueData.repository) {
+      console.warn('[webhook] projects_v2_item: could not fetch linked issue');
+      return;
+    }
+
+    const owner = issueData.repository.owner.login;
+    const repo = issueData.repository.name;
+    const issueNumber = issueData.number;
+
+    // Check if this repo is in our guardian list
+    if (!GUARDIAN_REPOS.includes(repo)) {
+      console.log(`[webhook] projects_v2_item: ${owner}/${repo}#${issueNumber} not in GUARDIAN_REPOS, skipping`);
+      return;
+    }
+
+    console.log(`[webhook] projects_v2_item.${payload.action}: processing ${owner}/${repo}#${issueNumber}`);
+
+    // Build issue object compatible with Guardian
+    const issue = {
+      number: issueData.number,
+      title: issueData.title,
+      body: issueData.body || '',
+      state: issueData.state,
+      labels: (issueData.labels?.nodes || []).map((l) => ({ name: l.name })),
+      assignees: (issueData.assignees?.nodes || []).map((a) => ({ login: a.login })),
+    };
+
+    const comments = await getIssueComments(octokit, owner, repo, issueNumber);
+    const currentStatus = extractCurrentStatus(issue);
+
+    await runGuardian(octokit, {
+      owner,
+      repo,
+      issueNumber,
+      issue,
+      projectStatus: currentStatus,
+      comments,
+    });
+  } catch (err) {
+    console.error(`[webhook] handleProjectItemEvent error: ${err.message}`, err.stack);
+  }
+}
+
 // ─── Express setup ────────────────────────────────────────────────────────────
 
 const server = express();
@@ -247,7 +332,7 @@ server.post('/github-app', async (req, res) => {
       console.log(`[webhook] Event: ${event}, action: ${payload.action}`);
 
       if (event === 'issues') {
-        if (payload.action === 'opened') {
+        if (payload.action === 'opened' || payload.action === 'transferred') {
           await handleIssueOpened(payload, octokit, graphqlFn);
         } else if (payload.action === 'edited') {
           await handleIssueEdited(payload, octokit, graphqlFn);
@@ -255,6 +340,13 @@ server.post('/github-app', async (req, res) => {
       } else if (event === 'issue_comment') {
         if (payload.action === 'created') {
           await handleIssueCommentCreated(payload, octokit, graphqlFn);
+        }
+      } else if (event === 'projects_v2_item') {
+        // Handle project item events (created = issue added to project, edited = status changed)
+        if (payload.action === 'created' || payload.action === 'edited') {
+          await handleProjectItemEvent(payload, octokit, graphqlFn);
+        } else {
+          console.log(`[webhook] projects_v2_item.${payload.action} — skipped`);
         }
       } else if (event === 'ping') {
         console.log('[webhook] Ping received — app is connected');
@@ -277,21 +369,13 @@ server.use((_req, res) => {
 async function bootstrap() {
   // Fetch PROJECT.json from primary repo and cache it
   try {
-    // Use the app's JWT to get an installation list
-    const installations = await app.octokit.rest.apps.listInstallations({ per_page: 10 });
-    const installation = installations.data.find(
-      (i) => i.account?.login === GITHUB_ORG,
-    ) || installations.data[0];
-
-    if (installation) {
-      const octokit = await app.getInstallationOctokit(installation.id);
-      const config = await fetchProjectConfig(octokit, GITHUB_ORG, 'sur-tasks');
-      if (config) {
-        setProjectConfig(config);
-        console.log('[boot] PROJECT.json loaded from sur-tasks');
-      } else {
-        console.warn('[boot] PROJECT.json not found in sur-tasks — using defaults');
-      }
+    const octokit = await app.getInstallationOctokit(Number(INSTALLATION_ID));
+    const config = await fetchProjectConfig(octokit, GITHUB_ORG, 'sur-tasks');
+    if (config) {
+      setProjectConfig(config);
+      console.log('[boot] PROJECT.json loaded from sur-tasks');
+    } else {
+      console.warn('[boot] PROJECT.json not found in sur-tasks — using defaults');
     }
   } catch (err) {
     console.warn(`[boot] Could not fetch PROJECT.json: ${err.message}`);

@@ -392,6 +392,12 @@ export async function runGuardian(octokit, { owner, repo, issueNumber, issue, pr
 
     console.log(`[guardian] Checking ${owner}/${repo}#${issueNumber} (status: ${status})`);
 
+    // Post "thinking" indicator
+    await upsertBotComment(
+      octokit, owner, repo, issueNumber, MARKER,
+      `${MARKER}\n## 🛡️ Guardian проверяет...\n\nАнализирую задачу по 9 заповедям. Это может занять до 60 секунд.`,
+    );
+
     // Run all checks concurrently where possible
     const [
       c1, c2, c5, c7, c8, c9,

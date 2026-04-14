@@ -6,7 +6,7 @@
 
 import { nowMoscow } from './config.js';
 import { analyzeIssueLLM } from './llm-client.js';
-import { postComment } from './github-client.js';
+import { upsertBotComment } from './github-client.js';
 
 const AI_MARKER = '<!-- ai-analysis -->';
 
@@ -95,6 +95,12 @@ export async function handleAI(octokit, { owner, repo, issueNumber, issue }) {
 
     console.log(`[ai] Analyzing ${owner}/${repo}#${issueNumber}`);
 
+    // Post "thinking" comment
+    await upsertBotComment(
+      octokit, owner, repo, issueNumber, AI_MARKER,
+      `${AI_MARKER}\n## 🤖 AI думает...\n\nАнализирую задачу. Это может занять до 60 секунд.`,
+    );
+
     // Try LLM analysis
     let analysis = null;
     const llmResult = await analyzeIssueLLM(title, body);
@@ -107,34 +113,17 @@ export async function handleAI(octokit, { owner, repo, issueNumber, issue }) {
 
     const { priority, type, complexity, summary } = analysis;
 
-    const commentBody = `${AI_MARKER}
-## 🤖 AI-анализ задачи
+    const commentBody = `${AI_MARKER}\n## 🤖 AI-анализ задачи\n\n*Проверено: ${nowMoscow()}*\n\n| Параметр | Значение |\n|---|---|\n| 🎯 Приоритет | ${priorityBadge(priority)} |\n| 🏷️ Тип | ${typeBadge(type)} |\n| 📊 Сложность | ${complexityBadge(complexity)} |\n\n### 📝 Резюме\n${summary}\n\n---\n*Анализ выполнен автоматически. Для повторного анализа напишите \`/ai\` или \`@ai\` в комментарии.*`;
 
-*Проверено: ${nowMoscow()}*
-
-| Параметр | Значение |
-|---|---|
-| 🎯 Приоритет | ${priorityBadge(priority)} |
-| 🏷️ Тип | ${typeBadge(type)} |
-| 📊 Сложность | ${complexityBadge(complexity)} |
-
-### 📝 Резюме
-${summary}
-
----
-*Анализ выполнен автоматически. Для повторного анализа напишите \`/ai\` в комментарии.*`;
-
-    await postComment(octokit, owner, repo, issueNumber, commentBody);
+    // Replace "thinking" with result
+    await upsertBotComment(octokit, owner, repo, issueNumber, AI_MARKER, commentBody);
     console.log(`[ai] Posted analysis for ${owner}/${repo}#${issueNumber}`);
   } catch (err) {
     console.error(`[ai] handleAI error: ${err.message}`);
     try {
-      await postComment(
-        octokit,
-        owner,
-        repo,
-        issueNumber,
-        `❌ Ошибка при выполнении AI-анализа: ${err.message}`,
+      await upsertBotComment(
+        octokit, owner, repo, issueNumber, AI_MARKER,
+        `${AI_MARKER}\n## ❌ Ошибка AI-анализа\n\n${err.message}`,
       );
     } catch {
       // ignore

@@ -20,7 +20,8 @@ import {
   nowMoscow,
 } from './config.js';
 import {
-  upsertBotComment,
+  postComment,
+  updateComment,
   countInProgressForAssignee,
   getProjectItemForIssue,
   getStatusFieldOptions,
@@ -392,11 +393,12 @@ export async function runGuardian(octokit, { owner, repo, issueNumber, issue, pr
 
     console.log(`[guardian] Checking ${owner}/${repo}#${issueNumber} (status: ${status})`);
 
-    // Post "thinking" indicator
-    await upsertBotComment(
-      octokit, owner, repo, issueNumber, MARKER,
+    // Post "thinking" indicator (always a new comment)
+    const thinkingComment = await postComment(
+      octokit, owner, repo, issueNumber,
       `${MARKER}\n## 🛡️ Guardian проверяет...\n\nАнализирую задачу по 9 заповедям. Это может занять до 60 секунд.`,
     );
+    const guardianCommentId = thinkingComment?.id;
 
     // Run all checks concurrently where possible
     const [
@@ -484,7 +486,12 @@ ${table}
 ${routingBlock}
 `;
 
-    await upsertBotComment(octokit, owner, repo, issueNumber, MARKER, commentBody);
+    // Update the thinking comment with results (or create new if thinking failed)
+    if (guardianCommentId) {
+      await updateComment(octokit, owner, repo, guardianCommentId, commentBody);
+    } else {
+      await postComment(octokit, owner, repo, issueNumber, commentBody);
+    }
 
     // If BLOCKED and not already in Backlog, move back to Backlog
     if (blockingFails.length > 0 && status !== 'Backlog' && graphqlFn) {

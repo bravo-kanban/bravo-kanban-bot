@@ -60,6 +60,12 @@ export const PROJECTS = {
     id: 'PVT_kwDOEGF_kM4BUKVd',
     statusFieldId: 'PVTSSF_lADOEGF_kM4BUKVdzhBUXxk',
     activityTypeFieldId: 'PVTSSF_lADOEGF_kM4BUKVdzhCHRbU',
+    subprojectFieldId: 'PVTSSF_lADOEGF_kM4BUKVdzhCIHX8',
+    subprojects: {
+      'Браво': '4914db8b',
+      'Клара': 'c5f81194',
+      'Инсайд': 'd1c3ac0b',
+    },
     repos: ['sur-tasks'],
   },
   'ФД': {

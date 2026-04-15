@@ -24,6 +24,7 @@ export function isReportCommand(body) {
 
 const PARAM_PATTERNS = {
   отдел: /(?:отдел|dept):(\S+)/i,
+  подпроект: /(?:подпроект|subproject|project):(\S+)/i,
   статус: /(?:статус|status):(\S+)/i,
   сотрудник: /(?:сотрудник|user):@?(\S+)/i,
   тип: /(?:тип|type):(\S+)/i,
@@ -164,6 +165,9 @@ async function fetchProjectItems(graphqlFn, projectId) {
       const typeField = fieldValues.find(
         (fv) => fv?.field?.name === 'Тип деятельности',
       );
+      const subprojectField = fieldValues.find(
+        (fv) => fv?.field?.name === 'Подпроект',
+      );
 
       items.push({
         number: item.content.number,
@@ -179,6 +183,7 @@ async function fetchProjectItems(graphqlFn, projectId) {
         assignees: (item.content.assignees?.nodes || []).map((a) => a.login),
         status: statusField?.name || 'No Status',
         activityType: typeField?.name || '—',
+        subproject: subprojectField?.name || '—',
       });
     }
 
@@ -230,6 +235,14 @@ function filterItems(items, params) {
     const login = params.сотрудник.replace('@', '');
     filtered = filtered.filter((i) =>
       i.assignees.some((a) => a.toLowerCase() === login.toLowerCase()),
+    );
+  }
+
+  // By sub-project (Браво / Клара / Инсайд)
+  if (params.подпроект) {
+    const target = params.подпроект.toLowerCase();
+    filtered = filtered.filter(
+      (i) => i.subproject.toLowerCase() === target,
     );
   }
 
@@ -293,6 +306,7 @@ function formatReport(items, params, projectKeys) {
 
   // Build filter description line
   const filterParts = [];
+  if (params.подпроект) filterParts.push(`подпроект: ${params.подпроект}`);
   if (params.статус) filterParts.push(`статус: ${params.статус}`);
   if (params.сотрудник) filterParts.push(`сотрудник: @${params.сотрудник}`);
   if (params.тип) filterParts.push(`тип: ${params.тип}`);
@@ -377,7 +391,7 @@ function formatReport(items, params, projectKeys) {
       table += `| ${item.number} | ${dept} | ${titleShort} | ${item.status} | ${item.activityType} | ${assignee} | ${deadline} |\n`;
     }
   } else {
-    table += `| # | Задача | Статус | Тип | Исполнитель | Дедлайн |\n|---|---|---|---|---|---|\n`;
+    table += `| # | Задача | Подпроект | Статус | Тип | Исполнитель | Дедлайн |\n|---|---|---|---|---|---|---|\n`;
     for (const item of showItems) {
       const deadline = extractDeadline(item.body) || '—';
       const assignee =
@@ -388,7 +402,7 @@ function formatReport(items, params, projectKeys) {
         item.title.length > 45
           ? item.title.slice(0, 45) + '…'
           : item.title;
-      table += `| ${item.number} | ${titleShort} | ${item.status} | ${item.activityType} | ${assignee} | ${deadline} |\n`;
+      table += `| ${item.number} | ${titleShort} | ${item.subproject} | ${item.status} | ${item.activityType} | ${assignee} | ${deadline} |\n`;
     }
   }
 

@@ -29,6 +29,7 @@ import { runGuardian, isGuardianTrigger } from './guardian.js';
 import { handleMove, parseMoveCommand } from './move-handler.js';
 import { handleAI, isAICommand } from './ai-handler.js';
 import { handleProtocol, isProtocolLabelAdded } from './protocol-handler.js';
+import { handleReport, isReportCommand } from './reports.js';
 import { fetchProjectConfig, getIssueComments, getIssue, getProjectItemForIssue, getStatusFieldOptions, updateProjectItemStatus } from './github-client.js';
 
 // ─── App initialization ───────────────────────────────────────────────────────
@@ -159,7 +160,19 @@ async function handleIssueCommentCreated(payload, octokit, graphqlFn) {
 
   const projectStatus = await getProjectStatus(graphqlFn, owner, repo, issueNumber);
 
-  // Check for /move command first
+  // Check for /report command first
+  if (isReportCommand(commentBody)) {
+    await handleReport(octokit, graphqlFn, {
+      owner,
+      repo,
+      issueNumber,
+      commentBody,
+      callerLogin: commenterLogin,
+    });
+    return;
+  }
+
+  // Check for /move command
   const moveTarget = parseMoveCommand(commentBody);
   if (moveTarget) {
     await handleMove(octokit, graphqlFn, {

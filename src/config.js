@@ -53,6 +53,38 @@ export const AI_MODEL = process.env.AI_MODEL || 'claude-sonnet-4-5';
 // Fallback model (same provider)
 export const AI_MODEL_FALLBACK = process.env.AI_MODEL_FALLBACK || 'claude-sonnet-4-5';
 
+// ─── Multi-project configuration ─────────────────────────────────────────────
+
+export const PROJECTS = {
+  'СУР': {
+    id: 'PVT_kwDOEGF_kM4BUKVd',
+    statusFieldId: 'PVTSSF_lADOEGF_kM4BUKVdzhBUXxk',
+    activityTypeFieldId: 'PVTSSF_lADOEGF_kM4BUKVdzhCHRbU',
+    repos: ['sur-tasks'],
+  },
+  'ФД': {
+    id: 'PVT_kwDOEGF_kM4BUKVe',
+    statusFieldId: 'PVTSSF_lADOEGF_kM4BUKVezhBUXyc',
+    activityTypeFieldId: 'PVTSSF_lADOEGF_kM4BUKVezhCHRbY',
+    repos: ['fd-tasks'],
+  },
+  'Head': {
+    id: 'PVT_kwDOEGF_kM4BUKVf',
+    statusFieldId: 'PVTSSF_lADOEGF_kM4BUKVfzhBUXzU',
+    activityTypeFieldId: 'PVTSSF_lADOEGF_kM4BUKVfzhCHRcQ',
+    repos: ['org-general'],
+  },
+};
+
+// Repo → which project keys can be seen from that repo
+export const REPO_ACCESS = {
+  'sur-tasks': ['СУР'],
+  'fd-tasks': ['ФД'],
+  'org-general': ['Head', 'СУР', 'ФД'],  // owner-only repo → full access
+};
+
+export const ORG_OWNER = process.env.ORG_OWNER || 'ivansym95-glitch';
+
 // ─── Kanban Statuses ─────────────────────────────────────────────────────────
 
 export const STATUSES = ['Backlog', 'To Do', 'In Progress', 'Review', 'Done'];

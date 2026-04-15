@@ -8,14 +8,11 @@
 import {
   STATUSES,
   STATUS_FORWARD_ORDER,
-  PROJECT_ID,
-  STATUS_FIELD_ID,
   AI_ROLE_TRIGGERS,
   nowMoscow,
   getProjectConfig,
 } from './config.js';
 import {
-  getProjectItemForIssue,
   getStatusFieldOptions,
   updateProjectItemStatus,
   upsertBotComment,
@@ -57,16 +54,17 @@ function normalizeTargetStatus(raw) {
 
 // ─── Resolve status option ID ─────────────────────────────────────────────────
 
-async function resolveStatusOptionId(graphqlFn, targetStatus) {
-  if (statusOptionsCache.has(STATUS_FIELD_ID)) {
-    const opts = statusOptionsCache.get(STATUS_FIELD_ID);
+async function resolveStatusOptionId(graphqlFn, projectId, statusFieldId, targetStatus) {
+  const cacheKey = `${projectId}:${statusFieldId}`;
+  if (statusOptionsCache.has(cacheKey)) {
+    const opts = statusOptionsCache.get(cacheKey);
     const opt = opts.find((o) => normalizeTargetStatus(o.name.toLowerCase()) === targetStatus);
     return opt?.id || null;
   }
 
-  const options = await getStatusFieldOptions(graphqlFn, PROJECT_ID, STATUS_FIELD_ID);
+  const options = await getStatusFieldOptions(graphqlFn, projectId, statusFieldId);
   if (options.length > 0) {
-    statusOptionsCache.set(STATUS_FIELD_ID, options);
+    statusOptionsCache.set(cacheKey, options);
   }
 
   const opt = options.find((o) => normalizeTargetStatus(o.name.toLowerCase()) === targetStatus);
@@ -232,7 +230,7 @@ async function buildAITriggerComment(role, targetStatus, issue) {
 export async function handleMove(
   octokit,
   graphqlFn,
-  { owner, repo, issueNumber, issue, commentBody, commenterLogin, currentStatus },
+  { owner, repo, issueNumber, issue, commentBody, commenterLogin, currentStatus, resolved },
 ) {
   try {
     const targetStatus = parseMoveCommand(commentBody);
@@ -270,32 +268,28 @@ export async function handleMove(
       return;
     }
 
-    // Get project item
-    const { itemId } = await getProjectItemForIssue(
-      graphqlFn,
-      PROJECT_ID,
-      owner,
-      repo,
-      issueNumber,
-    );
+    // Get project item from resolved context
+    const projectId = resolved?.projectId;
+    const statusFieldId = resolved?.statusFieldId;
+    const itemId = resolved?.itemId;
 
     let projectUpdated = false;
-    if (itemId) {
+    if (itemId && projectId && statusFieldId) {
       // Resolve status option ID
-      const optionId = await resolveStatusOptionId(graphqlFn, targetStatus);
+      const optionId = await resolveStatusOptionId(graphqlFn, projectId, statusFieldId, targetStatus);
       if (optionId) {
         projectUpdated = await updateProjectItemStatus(
           graphqlFn,
-          PROJECT_ID,
+          projectId,
           itemId,
-          STATUS_FIELD_ID,
+          statusFieldId,
           optionId,
         );
       } else {
         console.warn(`[move] Could not resolve option ID for status "${targetStatus}"`);
       }
     } else {
-      console.warn(`[move] Issue ${issueNumber} not found in project ${PROJECT_ID}`);
+      console.warn(`[move] Issue ${issueNumber} not found in any project`);
     }
 
     // Build success comment

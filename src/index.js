@@ -24,6 +24,7 @@ import {
   AI_MODEL,
   setProjectConfig,
 } from './config.js';
+import { resolveProjectForIssue, resolveProjectFromEvent } from './project-resolver.js';
 
 import { runGuardian, isGuardianTrigger } from './guardian.js';
 import { handleMove, parseMoveCommand } from './move-handler.js';
@@ -95,13 +96,16 @@ async function getGraphqlForInstallation(installationId) {
  * @param {number} issueNumber
  * @returns {Promise<string>}
  */
-async function getProjectStatus(graphqlFn, owner, repo, issueNumber) {
+async function getProjectContext(graphqlFn, owner, repo, issueNumber) {
   try {
-    const { currentStatus } = await getProjectItemForIssue(graphqlFn, PROJECT_ID, owner, repo, issueNumber);
-    return currentStatus || 'Backlog';
+    const resolved = await resolveProjectForIssue(graphqlFn, owner, repo, issueNumber);
+    return {
+      projectStatus: resolved?.currentStatus || 'Backlog',
+      resolved,
+    };
   } catch (err) {
-    console.warn(`[webhook] Could not fetch project status for #${issueNumber}: ${err.message}`);
-    return 'Backlog';
+    console.warn(`[webhook] Could not resolve project for #${issueNumber}: ${err.message}`);
+    return { projectStatus: 'Backlog', resolved: null };
   }
 }
 
@@ -114,7 +118,7 @@ async function handleIssueOpened(payload, octokit, graphqlFn) {
   const issueNumber = issue.number;
 
   const comments = await getIssueComments(octokit, owner, repo, issueNumber);
-  const projectStatus = await getProjectStatus(graphqlFn, owner, repo, issueNumber);
+  const { projectStatus, resolved } = await getProjectContext(graphqlFn, owner, repo, issueNumber);
 
   await runGuardian(octokit, {
     owner,
@@ -124,6 +128,7 @@ async function handleIssueOpened(payload, octokit, graphqlFn) {
     projectStatus,
     comments,
     graphqlFn,
+    resolved,
   });
 }
 
@@ -134,7 +139,7 @@ async function handleIssueEdited(payload, octokit, graphqlFn) {
   const issueNumber = issue.number;
 
   const comments = await getIssueComments(octokit, owner, repo, issueNumber);
-  const projectStatus = await getProjectStatus(graphqlFn, owner, repo, issueNumber);
+  const { projectStatus, resolved } = await getProjectContext(graphqlFn, owner, repo, issueNumber);
 
   await runGuardian(octokit, {
     owner,
@@ -144,6 +149,7 @@ async function handleIssueEdited(payload, octokit, graphqlFn) {
     projectStatus,
     comments,
     graphqlFn,
+    resolved,
   });
 }
 
@@ -158,7 +164,7 @@ async function handleIssueCommentCreated(payload, octokit, graphqlFn) {
   // Skip bot's own comments
   if (comment.user?.type === 'Bot') return;
 
-  const projectStatus = await getProjectStatus(graphqlFn, owner, repo, issueNumber);
+  const { projectStatus, resolved } = await getProjectContext(graphqlFn, owner, repo, issueNumber);
 
   // Check for /report command first
   if (isReportCommand(commentBody)) {
@@ -183,6 +189,7 @@ async function handleIssueCommentCreated(payload, octokit, graphqlFn) {
       commentBody,
       commenterLogin,
       currentStatus: projectStatus,
+      resolved,
     });
     return; // Don't run guardian after move — it'll run on next open/edit
   }
@@ -200,6 +207,7 @@ async function handleIssueCommentCreated(payload, octokit, graphqlFn) {
       projectStatus,
       comments,
       graphqlFn,
+      resolved,
     });
     return;
   }
@@ -215,6 +223,7 @@ async function handleIssueCommentCreated(payload, octokit, graphqlFn) {
       projectStatus,
       comments,
       graphqlFn,
+      resolved,
     });
   }
 }
@@ -333,12 +342,16 @@ async function handleProjectItemEvent(payload, octokit, graphqlFn) {
     // Auto-assign Backlog when item is added to project with no status
     if (!projectStatus && payload.action === 'created' && projectItemNodeId) {
       console.log(`[webhook] projects_v2_item.created: ${owner}/${repo}#${issueNumber} has no status, auto-assigning Backlog`);
+      const eventProjectNodeId = payload.projects_v2_item?.project_node_id;
+      const eventProject = resolveProjectFromEvent(eventProjectNodeId);
+      const pId = eventProject?.projectId || PROJECT_ID;
+      const sfId = eventProject?.statusFieldId || STATUS_FIELD_ID;
       try {
-        const options = await getStatusFieldOptions(graphqlFn, PROJECT_ID, STATUS_FIELD_ID);
+        const options = await getStatusFieldOptions(graphqlFn, pId, sfId);
         const backlogOption = options.find((o) => o.name.toLowerCase().includes('backlog'));
         if (backlogOption) {
-          await updateProjectItemStatus(graphqlFn, PROJECT_ID, projectItemNodeId, STATUS_FIELD_ID, backlogOption.id);
-          console.log(`[webhook] Auto-assigned Backlog to ${owner}/${repo}#${issueNumber}`);
+          await updateProjectItemStatus(graphqlFn, pId, projectItemNodeId, sfId, backlogOption.id);
+          console.log(`[webhook] Auto-assigned Backlog to ${owner}/${repo}#${issueNumber} in ${eventProject?.key || 'default'}`);
         }
       } catch (autoErr) {
         console.warn(`[webhook] Failed to auto-assign Backlog: ${autoErr.message}`);
@@ -375,6 +388,18 @@ async function handleProjectItemEvent(payload, octokit, graphqlFn) {
 
     const comments = await getIssueComments(octokit, owner, repo, issueNumber);
 
+    // Resolve project from the webhook event
+    const eventProjectNodeId = payload.projects_v2_item?.project_node_id;
+    const eventProject = resolveProjectFromEvent(eventProjectNodeId);
+    const resolved = eventProject ? {
+      key: eventProject.key,
+      projectId: eventProject.projectId,
+      statusFieldId: eventProject.statusFieldId,
+      backlogOptionId: eventProject.backlogOptionId,
+      itemId: projectItemNodeId,
+      currentStatus: projectStatus,
+    } : null;
+
     await runGuardian(octokit, {
       owner,
       repo,
@@ -383,6 +408,7 @@ async function handleProjectItemEvent(payload, octokit, graphqlFn) {
       projectStatus,
       comments,
       graphqlFn,
+      resolved,
     });
   } catch (err) {
     console.error(`[webhook] handleProjectItemEvent error: ${err.message}`, err.stack);

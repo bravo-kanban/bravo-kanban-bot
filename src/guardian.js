@@ -457,6 +457,12 @@ export async function runGuardian(octokit, { owner, repo, issueNumber, issue, pr
     const title = issue.title || '';
     const body = issue.body || '';
 
+    // Skip Guardian for Backlog tasks — no point checking until they move forward
+    if (status === 'Backlog') {
+      console.log(`[guardian] Skipping ${owner}/${repo}#${issueNumber} — status is Backlog`);
+      return;
+    }
+
     console.log(`[guardian] Checking ${owner}/${repo}#${issueNumber} (project: ${projectKey || 'unknown'}, status: ${status})`);
 
     // Post "thinking" indicator (always a new comment)

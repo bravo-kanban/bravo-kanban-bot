@@ -38,9 +38,18 @@ import { suggestRouting } from './team-routing.js';
 const MARKER = '<!-- guardian-check -->';
 
 // ─── Debounce — prevents duplicate runs from overlapping webhook events ──────
+//
+// Problem: Guardian takes up to 60–90s (LLM checks). When it moves a card to
+// Backlog, GitHub fires projects_v2_item.edited, which triggers a second run.
+// A simple timestamp-from-start debounce fails because the window expires
+// before the first run finishes.
+//
+// Solution: record timestamp at BOTH start and finish of each run.
+// The 30s debounce window resets after the run completes, so any follow-up
+// webhook event within 30s of completion is suppressed.
 
 const recentGuardianRuns = new Map(); // key: "owner/repo#number" → timestamp
-const DEBOUNCE_MS = 30_000; // 30 seconds
+const DEBOUNCE_MS = 30_000; // 30 seconds after last activity
 
 function shouldDebounce(owner, repo, issueNumber) {
   const key = `${owner}/${repo}#${issueNumber}`;
@@ -54,10 +63,16 @@ function shouldDebounce(owner, repo, issueNumber) {
   // Cleanup old entries
   if (recentGuardianRuns.size > 100) {
     for (const [k, v] of recentGuardianRuns) {
-      if (now - v > 120_000) recentGuardianRuns.delete(k);
+      if (now - v > 300_000) recentGuardianRuns.delete(k);
     }
   }
   return false;
+}
+
+/** Refresh debounce timestamp (call after run completes). */
+function refreshDebounce(owner, repo, issueNumber) {
+  const key = `${owner}/${repo}#${issueNumber}`;
+  recentGuardianRuns.set(key, Date.now());
 }
 
 // ─── Default profile (fallback when project has no profile) ──────────────────
@@ -585,9 +600,15 @@ ${routingBlock}
       }
     }
 
+    // Refresh debounce AFTER run completes so the 30s window starts now,
+    // not from when the run started (which could be 60–90s ago).
+    refreshDebounce(owner, repo, issueNumber);
+
     console.log(`[guardian] Done. Project: ${projectKey}, Verdict: ${verdict}`);
   } catch (err) {
     console.error(`[guardian] runGuardian error: ${err.message}`);
+    // Still refresh debounce on error to prevent retry storms
+    refreshDebounce(owner, repo, issueNumber);
   }
 }
 

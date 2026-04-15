@@ -18,6 +18,7 @@ import {
   GUARDIAN_REPOS,
   INSTALLATION_ID,
   PROJECT_ID,
+  STATUS_FIELD_ID,
   AI_API_KEY,
   AI_BASE_URL,
   AI_MODEL,
@@ -28,7 +29,7 @@ import { runGuardian, isGuardianTrigger } from './guardian.js';
 import { handleMove, parseMoveCommand } from './move-handler.js';
 import { handleAI, isAICommand } from './ai-handler.js';
 import { handleProtocol, isProtocolLabelAdded } from './protocol-handler.js';
-import { fetchProjectConfig, getIssueComments, getIssue, getProjectItemForIssue } from './github-client.js';
+import { fetchProjectConfig, getIssueComments, getIssue, getProjectItemForIssue, getStatusFieldOptions, updateProjectItemStatus } from './github-client.js';
 
 // ─── App initialization ───────────────────────────────────────────────────────
 
@@ -314,9 +315,34 @@ async function handleProjectItemEvent(payload, octokit, graphqlFn) {
     const statusField = fieldValues.find(
       (fv) => fv?.field?.name?.toLowerCase().includes('status'),
     );
-    const projectStatus = statusField?.name || 'Backlog';
+    let projectStatus = statusField?.name || null;
+
+    // Auto-assign Backlog when item is added to project with no status
+    if (!projectStatus && payload.action === 'created' && projectItemNodeId) {
+      console.log(`[webhook] projects_v2_item.created: ${owner}/${repo}#${issueNumber} has no status, auto-assigning Backlog`);
+      try {
+        const options = await getStatusFieldOptions(graphqlFn, PROJECT_ID, STATUS_FIELD_ID);
+        const backlogOption = options.find((o) => o.name.toLowerCase().includes('backlog'));
+        if (backlogOption) {
+          await updateProjectItemStatus(graphqlFn, PROJECT_ID, projectItemNodeId, STATUS_FIELD_ID, backlogOption.id);
+          console.log(`[webhook] Auto-assigned Backlog to ${owner}/${repo}#${issueNumber}`);
+        }
+      } catch (autoErr) {
+        console.warn(`[webhook] Failed to auto-assign Backlog: ${autoErr.message}`);
+      }
+      projectStatus = 'Backlog';
+    }
+
+    if (!projectStatus) projectStatus = 'Backlog';
 
     console.log(`[webhook] projects_v2_item.${payload.action}: processing ${owner}/${repo}#${issueNumber} (status: ${projectStatus})`);
+
+    // Skip Guardian re-run if we just auto-assigned Backlog (it will fire an 'edited' event)
+    if (payload.action === 'created' && !statusField?.name) {
+      // Guardian will run when the 'edited' event fires after status assignment
+      console.log(`[webhook] Skipping Guardian on 'created' — will run on subsequent 'edited' event`);
+      return;
+    }
 
     // Debounce: skip if Guardian just ran on this issue (prevents loops)
     if (shouldSkipDebounce(owner, repo, issueNumber)) {

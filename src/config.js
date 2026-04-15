@@ -109,6 +109,123 @@ export const REPO_ACCESS = {
 
 export const ORG_OWNER = process.env.ORG_OWNER || 'ivansym95-glitch';
 
+// ─── Per-project Guardian profiles ───────────────────────────────────────────
+// Each profile customises which checks run, which are blocking vs warning,
+// WIP limits, and whether a BLOCKED verdict auto-moves the issue to Backlog.
+//
+// Check IDs: atomicity, smart, singleOwner, deadline, statusTransparency,
+//            wipLimit, dod, inSystem, backlogGrooming
+
+export const GUARDIAN_PROFILES = {
+  // ─── СУР — общий канбан, стандартный набор ─────────────────────────────
+  'СУР': {
+    enabled: true,
+    checks: {
+      atomicity:          { enabled: true,  type: 'block' },
+      smart:              { enabled: true,  type: 'block' },
+      singleOwner:        { enabled: true,  type: 'block' },
+      deadline:           { enabled: true,  type: 'block' },
+      statusTransparency: { enabled: true,  type: 'warn'  },
+      wipLimit:           { enabled: true,  type: 'block' },
+      dod:                { enabled: true,  type: 'block' },
+      inSystem:           { enabled: true,  type: 'block' },
+      backlogGrooming:    { enabled: true,  type: 'warn'  },
+    },
+    wipLimit: 3,
+    autoMoveToBacklog: true,
+  },
+
+  // ─── Браво — разработка, строгий режим ─────────────────────────────────
+  'Браво': {
+    enabled: true,
+    checks: {
+      atomicity:          { enabled: true,  type: 'block' },
+      smart:              { enabled: true,  type: 'block' },
+      singleOwner:        { enabled: true,  type: 'block' },
+      deadline:           { enabled: true,  type: 'block' },
+      statusTransparency: { enabled: true,  type: 'warn'  },
+      wipLimit:           { enabled: true,  type: 'block' },
+      dod:                { enabled: true,  type: 'block' },
+      inSystem:           { enabled: true,  type: 'block' },
+      backlogGrooming:    { enabled: true,  type: 'warn'  },
+    },
+    wipLimit: 2,
+    autoMoveToBacklog: true,
+  },
+
+  // ─── Клара — аналитика, мягче с DoD ────────────────────────────────────
+  'Клара': {
+    enabled: true,
+    checks: {
+      atomicity:          { enabled: true,  type: 'block' },
+      smart:              { enabled: true,  type: 'block' },
+      singleOwner:        { enabled: true,  type: 'block' },
+      deadline:           { enabled: true,  type: 'warn'  },
+      statusTransparency: { enabled: true,  type: 'warn'  },
+      wipLimit:           { enabled: true,  type: 'warn'  },
+      dod:                { enabled: true,  type: 'warn'  },
+      inSystem:           { enabled: true,  type: 'block' },
+      backlogGrooming:    { enabled: true,  type: 'warn'  },
+    },
+    wipLimit: 4,
+    autoMoveToBacklog: true,
+  },
+
+  // ─── Инсайд — аналитика, аналогично Кларе ─────────────────────────────
+  'Инсайд': {
+    enabled: true,
+    checks: {
+      atomicity:          { enabled: true,  type: 'block' },
+      smart:              { enabled: true,  type: 'block' },
+      singleOwner:        { enabled: true,  type: 'block' },
+      deadline:           { enabled: true,  type: 'warn'  },
+      statusTransparency: { enabled: true,  type: 'warn'  },
+      wipLimit:           { enabled: true,  type: 'warn'  },
+      dod:                { enabled: true,  type: 'warn'  },
+      inSystem:           { enabled: true,  type: 'block' },
+      backlogGrooming:    { enabled: true,  type: 'warn'  },
+    },
+    wipLimit: 4,
+    autoMoveToBacklog: true,
+  },
+
+  // ─── ФД — финансовый департамент, строгий режим ────────────────────────
+  'ФД': {
+    enabled: true,
+    checks: {
+      atomicity:          { enabled: true,  type: 'block' },
+      smart:              { enabled: true,  type: 'block' },
+      singleOwner:        { enabled: true,  type: 'block' },
+      deadline:           { enabled: true,  type: 'block' },
+      statusTransparency: { enabled: true,  type: 'warn'  },
+      wipLimit:           { enabled: true,  type: 'block' },
+      dod:                { enabled: true,  type: 'block' },
+      inSystem:           { enabled: true,  type: 'block' },
+      backlogGrooming:    { enabled: true,  type: 'warn'  },
+    },
+    wipLimit: 3,
+    autoMoveToBacklog: true,
+  },
+
+  // ─── Head — управление, облегчённый режим ──────────────────────────────
+  'Head': {
+    enabled: true,
+    checks: {
+      atomicity:          { enabled: true,  type: 'warn'  },
+      smart:              { enabled: true,  type: 'warn'  },
+      singleOwner:        { enabled: true,  type: 'block' },
+      deadline:           { enabled: true,  type: 'warn'  },
+      statusTransparency: { enabled: true,  type: 'warn'  },
+      wipLimit:           { enabled: false, type: 'warn'  },
+      dod:                { enabled: false, type: 'warn'  },
+      inSystem:           { enabled: true,  type: 'warn'  },
+      backlogGrooming:    { enabled: true,  type: 'warn'  },
+    },
+    wipLimit: 5,
+    autoMoveToBacklog: false,
+  },
+};
+
 // ─── Kanban Statuses ─────────────────────────────────────────────────────────
 
 export const STATUSES = ['Backlog', 'To Do', 'In Progress', 'Review', 'Done'];

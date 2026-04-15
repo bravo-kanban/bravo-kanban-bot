@@ -98,7 +98,8 @@ function getAccessibleProjects(repo, callerLogin, requestedDept) {
     return []; // no access
   }
 
-  // Default: projects linked to current repo
+  // Default: for sur-tasks, show only sub-projects (not parent СУР)
+  if (repo === 'sur-tasks') return ['Браво', 'Клара', 'Инсайд'];
   if (repo === 'org-general') return ['Head'];
   return allowedKeys;
 }

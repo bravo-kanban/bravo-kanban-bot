@@ -60,13 +60,31 @@ export const PROJECTS = {
     id: 'PVT_kwDOEGF_kM4BUKVd',
     statusFieldId: 'PVTSSF_lADOEGF_kM4BUKVdzhBUXxk',
     activityTypeFieldId: 'PVTSSF_lADOEGF_kM4BUKVdzhCHRbU',
-    subprojectFieldId: 'PVTSSF_lADOEGF_kM4BUKVdzhCIHX8',
-    subprojects: {
-      'Браво': '4914db8b',
-      'Клара': 'c5f81194',
-      'Инсайд': 'd1c3ac0b',
-    },
     repos: ['sur-tasks'],
+  },
+  'Браво': {
+    id: 'PVT_kwDOEGF_kM4BUsbY',
+    statusFieldId: 'PVTSSF_lADOEGF_kM4BUsbYzhCIJTo',
+    activityTypeFieldId: 'PVTSSF_lADOEGF_kM4BUsbYzhCIJoE',
+    backlogOptionId: '5e01469c',
+    repos: ['sur-tasks'],
+    parent: 'СУР',
+  },
+  'Клара': {
+    id: 'PVT_kwDOEGF_kM4BUsbZ',
+    statusFieldId: 'PVTSSF_lADOEGF_kM4BUsbZzhCIJUg',
+    activityTypeFieldId: 'PVTSSF_lADOEGF_kM4BUsbZzhCIJoI',
+    backlogOptionId: 'effaf114',
+    repos: ['sur-tasks'],
+    parent: 'СУР',
+  },
+  'Инсайд': {
+    id: 'PVT_kwDOEGF_kM4BUsba',
+    statusFieldId: 'PVTSSF_lADOEGF_kM4BUsbazhCIJVY',
+    activityTypeFieldId: 'PVTSSF_lADOEGF_kM4BUsbazhCIJp4',
+    backlogOptionId: 'd645cc15',
+    repos: ['sur-tasks'],
+    parent: 'СУР',
   },
   'ФД': {
     id: 'PVT_kwDOEGF_kM4BUKVe',
@@ -84,9 +102,9 @@ export const PROJECTS = {
 
 // Repo → which project keys can be seen from that repo
 export const REPO_ACCESS = {
-  'sur-tasks': ['СУР'],
+  'sur-tasks': ['СУР', 'Браво', 'Клара', 'Инсайд'],
   'fd-tasks': ['ФД'],
-  'org-general': ['Head', 'СУР', 'ФД'],  // owner-only repo → full access
+  'org-general': ['Head', 'СУР', 'Браво', 'Клара', 'Инсайд', 'ФД'],
 };
 
 export const ORG_OWNER = process.env.ORG_OWNER || 'ivansym95-glitch';

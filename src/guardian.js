@@ -37,6 +37,29 @@ import { suggestRouting } from './team-routing.js';
 
 const MARKER = '<!-- guardian-check -->';
 
+// ─── Debounce — prevents duplicate runs from overlapping webhook events ──────
+
+const recentGuardianRuns = new Map(); // key: "owner/repo#number" → timestamp
+const DEBOUNCE_MS = 30_000; // 30 seconds
+
+function shouldDebounce(owner, repo, issueNumber) {
+  const key = `${owner}/${repo}#${issueNumber}`;
+  const lastRun = recentGuardianRuns.get(key);
+  const now = Date.now();
+  if (lastRun && now - lastRun < DEBOUNCE_MS) {
+    console.log(`[guardian] Debounce: skipping ${key} (ran ${now - lastRun}ms ago)`);
+    return true;
+  }
+  recentGuardianRuns.set(key, now);
+  // Cleanup old entries
+  if (recentGuardianRuns.size > 100) {
+    for (const [k, v] of recentGuardianRuns) {
+      if (now - v > 120_000) recentGuardianRuns.delete(k);
+    }
+  }
+  return false;
+}
+
 // ─── Default profile (fallback when project has no profile) ──────────────────
 
 const DEFAULT_PROFILE = {
@@ -400,6 +423,12 @@ function fmtStatus(result) {
  */
 export async function runGuardian(octokit, { owner, repo, issueNumber, issue, projectStatus, comments, graphqlFn, resolved }) {
   try {
+    // Global debounce — prevents duplicate comments when multiple webhook events
+    // fire for the same issue (e.g. issues.opened + projects_v2_item.edited)
+    if (shouldDebounce(owner, repo, issueNumber)) {
+      return;
+    }
+
     const projectKey = resolved?.key || null;
     const profile = getProfile(projectKey);
 

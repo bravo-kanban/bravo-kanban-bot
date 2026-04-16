@@ -175,6 +175,148 @@ export async function linearGetIssueComments(issueId) {
   }
 }
 
+// ─── Issue creation ──────────────────────────────────────────────────
+
+/**
+ * Create a new issue in Linear.
+ * @param {object} params
+ * @param {string} params.teamId — team UUID
+ * @param {string} params.title
+ * @param {string} [params.description] — markdown body
+ * @param {string} [params.assigneeId]
+ * @param {string} [params.projectId]
+ * @param {string} [params.parentId] — parent issue (for sub-issues)
+ * @param {string[]} [params.labelIds]
+ * @param {string} [params.stateId] — initial workflow state
+ * @param {string} [params.dueDate] — YYYY-MM-DD
+ * @returns {Promise<{id: string, identifier: string, url: string, title: string}|null>}
+ */
+export async function linearCreateIssue({ teamId, title, description, assigneeId, projectId, parentId, labelIds, stateId, dueDate }) {
+  try {
+    const input = { teamId, title };
+    if (description) input.description = description;
+    if (assigneeId) input.assigneeId = assigneeId;
+    if (projectId) input.projectId = projectId;
+    if (parentId) input.parentId = parentId;
+    if (labelIds?.length) input.labelIds = labelIds;
+    if (stateId) input.stateId = stateId;
+    if (dueDate) input.dueDate = dueDate;
+
+    const data = await linearGraphQL(
+      `mutation($input: IssueCreateInput!) {
+        issueCreate(input: $input) {
+          success
+          issue {
+            id
+            identifier
+            url
+            title
+          }
+        }
+      }`,
+      { input },
+    );
+    const result = data?.issueCreate;
+    if (!result?.success) {
+      console.error('[linear] issueCreate: success=false');
+      return null;
+    }
+    console.log(`[linear] Created issue ${result.issue.identifier}: ${result.issue.title}`);
+    return result.issue;
+  } catch (err) {
+    console.error(`[linear] createIssue error: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Add a label to a Linear issue.
+ * @param {string} issueId
+ * @param {string[]} labelIds
+ * @returns {Promise<boolean>}
+ */
+export async function linearAddLabelsToIssue(issueId, labelIds) {
+  try {
+    // We need to get existing labels first, then merge
+    const issue = await linearGetIssue(issueId);
+    const existingIds = (issue?.labels?.nodes || []).map((l) => l.id);
+    const allIds = [...new Set([...existingIds, ...labelIds])];
+
+    const data = await linearGraphQL(
+      `mutation($issueId: String!, $labelIds: [String!]!) {
+        issueUpdate(id: $issueId, input: { labelIds: $labelIds }) {
+          success
+        }
+      }`,
+      { issueId, labelIds: allIds },
+    );
+    return data?.issueUpdate?.success || false;
+  } catch (err) {
+    console.error(`[linear] addLabels error: ${err.message}`);
+    return false;
+  }
+}
+
+/**
+ * Search for a label by name within a team (or workspace).
+ * @param {string} name — label name to find
+ * @param {string} [teamId] — optional team filter
+ * @returns {Promise<{id: string, name: string}|null>}
+ */
+export async function linearFindLabel(name, teamId) {
+  try {
+    const data = await linearGraphQL(`
+      query {
+        issueLabels {
+          nodes {
+            id
+            name
+            team { id }
+          }
+        }
+      }
+    `);
+    const labels = data?.issueLabels?.nodes || [];
+    const match = labels.find((l) => {
+      const nameMatch = l.name.toLowerCase() === name.toLowerCase();
+      if (!teamId) return nameMatch;
+      return nameMatch && (!l.team || l.team.id === teamId);
+    });
+    return match || null;
+  } catch (err) {
+    console.error(`[linear] findLabel error: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Create a label in Linear.
+ * @param {string} name
+ * @param {string} teamId
+ * @param {string} [color] — hex color, default '#e74c3c'
+ * @returns {Promise<{id: string, name: string}|null>}
+ */
+export async function linearCreateLabel(name, teamId, color = '#e74c3c') {
+  try {
+    const data = await linearGraphQL(
+      `mutation($input: IssueLabelCreateInput!) {
+        issueLabelCreate(input: $input) {
+          success
+          issueLabel { id name }
+        }
+      }`,
+      { input: { name, teamId, color } },
+    );
+    const result = data?.issueLabelCreate;
+    if (!result?.success) return null;
+    console.log(`[linear] Created label "${name}" (${result.issueLabel.id})`);
+    return result.issueLabel;
+  } catch (err) {
+    console.error(`[linear] createLabel error: ${err.message}`);
+    return null;
+  }
+}
+
 // ─── State management ─────────────────────────────────────────────────────────
 
 /**

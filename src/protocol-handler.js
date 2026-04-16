@@ -6,9 +6,13 @@
  * then creates individual issues in the SAME repository.
  */
 
-import { TEAM_ROUTING, GITHUB_ORG, PROJECT_ID, STATUS_FIELD_ID, nowMoscow } from './config.js';
+import { TEAM_ROUTING, GITHUB_ORG, PROJECT_ID, STATUS_FIELD_ID, LINEAR_TEAMS, nowMoscow } from './config.js';
 import { callLLM } from './llm-client.js';
 import { postComment, addLabels, getProjectItemForIssue, getStatusFieldOptions, updateProjectItemStatus } from './github-client.js';
+import {
+  linearPostComment, linearCreateIssue, linearAddLabelsToIssue,
+  linearFindLabel, linearCreateLabel, linearUpdateIssueState,
+} from './linear-client.js';
 
 const PROCESSING_MARKER = '<!-- protocol-processing -->';
 const RESULT_MARKER = '<!-- protocol-result -->';
@@ -347,4 +351,138 @@ export function isProtocolLabelAdded(payload) {
   if (payload.action !== 'labeled') return false;
   const labelName = (payload.label?.name || '').toLowerCase();
   return labelName === 'протокол' || labelName === 'protocol';
+}
+
+// ─── Linear protocol handler ───────────────────────────────────────────
+
+/**
+ * Check if a Linear issue has the "Протокол" label.
+ */
+export function isLinearProtocolIssue(issueData) {
+  const labels = issueData?.labels?.nodes || issueData?.labels || [];
+  return labels.some((l) => {
+    const name = (l.name || '').toLowerCase();
+    return name === 'протокол' || name === 'protocol';
+  });
+}
+
+/**
+ * Check if a Linear issue has been processed already (has "protocol: processed" label).
+ */
+function isLinearProtocolProcessed(issueData) {
+  const labels = issueData?.labels?.nodes || issueData?.labels || [];
+  return labels.some((l) => (l.name || '').toLowerCase() === 'protocol: processed');
+}
+
+/**
+ * Handle a Linear protocol issue — parse and create sub-issues.
+ *
+ * @param {object} params
+ * @param {string} params.issueId — Linear issue UUID
+ * @param {object} params.issue — { title, body, ... }
+ * @param {string} params.teamId — Linear team UUID
+ * @param {string} [params.projectId] — Linear project UUID
+ */
+export async function handleLinearProtocol({ issueId, issue, teamId, projectId }) {
+  try {
+    const title = issue.title || '';
+    const body = issue.body || '';
+
+    console.log(`[protocol-linear] Processing protocol: ${title} (${issueId})`);
+
+    // Post "processing" comment
+    await linearPostComment(
+      issueId,
+      `${PROCESSING_MARKER}\n## \u23F3 \u041E\u0431\u0440\u0430\u0431\u0430\u0442\u044B\u0432\u0430\u044E \u043F\u0440\u043E\u0442\u043E\u043A\u043E\u043B...\n\n\u0410\u043D\u0430\u043B\u0438\u0437\u0438\u0440\u0443\u044E \u0442\u0435\u043A\u0441\u0442 \u0438 \u0440\u0430\u0441\u043F\u0440\u0435\u0434\u0435\u043B\u044F\u044E \u0437\u0430\u0434\u0430\u0447\u0438. \u042D\u0442\u043E \u043C\u043E\u0436\u0435\u0442 \u0437\u0430\u043D\u044F\u0442\u044C \u0434\u043E 60 \u0441\u0435\u043A\u0443\u043D\u0434.`,
+    );
+
+    // Parse with AI (reuse the same function)
+    const tasks = await parseProtocolWithAI(title, body);
+
+    if (tasks.length === 0) {
+      await linearPostComment(
+        issueId,
+        `${RESULT_MARKER}\n## \u26A0\uFE0F \u0417\u0430\u0434\u0430\u0447\u0438 \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D\u044B\n\n\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0438\u0437\u0432\u043B\u0435\u0447\u044C \u0437\u0430\u0434\u0430\u0447\u0438. \u041F\u043E\u043F\u0440\u043E\u0431\u0443\u0439\u0442\u0435 \u0441\u043D\u044F\u0442\u044C \u0438 \u0437\u0430\u043D\u043E\u0432\u043E \u0434\u043E\u0431\u0430\u0432\u0438\u0442\u044C label "\u041F\u0440\u043E\u0442\u043E\u043A\u043E\u043B".`,
+      );
+      return;
+    }
+
+    // Create sub-issues in Linear
+    const created = [];
+    const failed = [];
+
+    for (const task of tasks) {
+      try {
+        const taskDescription = `${task.body || ''}\n\n---\n*\u0421\u043E\u0437\u0434\u0430\u043D\u043E \u0438\u0437 \u043F\u0440\u043E\u0442\u043E\u043A\u043E\u043B\u0430*`;
+
+        const newIssue = await linearCreateIssue({
+          teamId,
+          title: task.title,
+          description: taskDescription,
+          projectId: projectId || undefined,
+          parentId: issueId,
+        });
+
+        if (newIssue) {
+          created.push({
+            identifier: newIssue.identifier,
+            title: task.title,
+            url: newIssue.url,
+            assignee: task.assignee_name || '\u043D\u0435 \u043D\u0430\u0437\u043D\u0430\u0447\u0435\u043D',
+          });
+        } else {
+          failed.push({ title: task.title, error: 'API returned null' });
+        }
+      } catch (err) {
+        failed.push({ title: task.title, error: err.message });
+        console.error(`[protocol-linear] Failed to create "${task.title}": ${err.message}`);
+      }
+    }
+
+    // Build result comment
+    let resultBody = `${RESULT_MARKER}\n## \u2705 \u041F\u0440\u043E\u0442\u043E\u043A\u043E\u043B \u043E\u0431\u0440\u0430\u0431\u043E\u0442\u0430\u043D \u2014 \u0441\u043E\u0437\u0434\u0430\u043D\u043E ${created.length} \u0437\u0430\u0434\u0430\u0447\n\n`;
+
+    for (const c of created) {
+      resultBody += `- [${c.identifier}: ${c.title}](${c.url}) \u2192 ${c.assignee}\n`;
+    }
+
+    if (failed.length > 0) {
+      resultBody += `\n### \u274C \u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0441\u043E\u0437\u0434\u0430\u0442\u044C (${failed.length})\n`;
+      for (const f of failed) {
+        resultBody += `- ${f.title}: ${f.error}\n`;
+      }
+    }
+
+    resultBody += `\n---\n*\u041E\u0431\u0440\u0430\u0431\u043E\u0442\u0430\u043D\u043E: ${nowMoscow()}*`;
+
+    await linearPostComment(issueId, resultBody);
+
+    // Add "protocol: processed" label
+    let processedLabel = await linearFindLabel('protocol: processed', teamId);
+    if (!processedLabel) {
+      processedLabel = await linearCreateLabel('protocol: processed', teamId, '#27ae60');
+    }
+    if (processedLabel) {
+      await linearAddLabelsToIssue(issueId, [processedLabel.id]);
+    }
+
+    // Move protocol issue to Done
+    const teamKey = Object.keys(LINEAR_TEAMS).find((k) => LINEAR_TEAMS[k].id === teamId);
+    const teamData = teamKey ? LINEAR_TEAMS[teamKey] : null;
+    const doneState = teamData?.states?.Done;
+    if (doneState) {
+      await linearUpdateIssueState(issueId, doneState.id);
+      console.log(`[protocol-linear] Moved protocol to Done`);
+    }
+
+    console.log(`[protocol-linear] Done. Created ${created.length}, failed ${failed.length}`);
+  } catch (err) {
+    console.error(`[protocol-linear] Error: ${err.message}`);
+    try {
+      await linearPostComment(
+        issueId,
+        `${RESULT_MARKER}\n## \u274C \u041E\u0448\u0438\u0431\u043A\u0430 \u043E\u0431\u0440\u0430\u0431\u043E\u0442\u043A\u0438 \u043F\u0440\u043E\u0442\u043E\u043A\u043E\u043B\u0430\n\n${err.message}`,
+      );
+    } catch { /* ignore */ }
+  }
 }

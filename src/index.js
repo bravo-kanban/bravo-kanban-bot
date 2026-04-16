@@ -35,7 +35,7 @@ import { createGitHubAdapter, createLinearAdapter } from './platform.js';
 import { runGuardian, isGuardianTrigger } from './guardian.js';
 import { handleMove, parseMoveCommand } from './move-handler.js';
 import { handleAI, isAICommand } from './ai-handler.js';
-import { handleProtocol, isProtocolLabelAdded } from './protocol-handler.js';
+import { handleProtocol, isProtocolLabelAdded, isLinearProtocolIssue, handleLinearProtocol } from './protocol-handler.js';
 import { handleReport, isReportCommand } from './reports.js';
 import { fetchProjectConfig, getIssueComments, getIssue, getProjectItemForIssue, getStatusFieldOptions, updateProjectItemStatus } from './github-client.js';
 import { linearGetTeams, linearGetIssue, linearGetIssueComments } from './linear-client.js';
@@ -541,6 +541,23 @@ async function handleLinearIssueEvent(webhookPayload) {
     const resolved = { key: projectKey };
 
     console.log(`[linear-webhook] Issue ${action}: ${fullIssue.title} (project: ${projectKey || 'unknown'}, state: ${stateName})`);
+
+    // Check if this is a protocol issue (has label "Протокол")
+    const hasProtocolLabel = isLinearProtocolIssue(fullIssue);
+    const alreadyProcessed = (fullIssue.labels?.nodes || []).some(
+      (l) => (l.name || '').toLowerCase() === 'protocol: processed',
+    );
+
+    if (hasProtocolLabel && !alreadyProcessed) {
+      console.log(`[linear-webhook] Protocol detected: ${fullIssue.title}`);
+      await handleLinearProtocol({
+        issueId: issueData.id,
+        issue,
+        teamId,
+        projectId: fullIssue.project?.id || null,
+      });
+      return;
+    }
 
     await runGuardian({
       issue,

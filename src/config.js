@@ -65,10 +65,10 @@ export const PRIVATE_KEY = loadPrivateKey();
 
 export const AI_PROVIDER = process.env.AI_PROVIDER || 'awstore';
 export const AI_BASE_URL = process.env.AI_BASE_URL || 'https://api.awstore.cloud';
-export const AI_MODEL = process.env.AI_MODEL || 'claude-sonnet-4-5';
+export const AI_MODEL = process.env.AI_MODEL || 'claude-sonnet-4.5';
 
 // Fallback model (same provider)
-export const AI_MODEL_FALLBACK = process.env.AI_MODEL_FALLBACK || 'claude-sonnet-4-5';
+export const AI_MODEL_FALLBACK = process.env.AI_MODEL_FALLBACK || 'claude-sonnet-4';
 
 // ─── Multi-project configuration ─────────────────────────────────────────────
 

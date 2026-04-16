@@ -22,6 +22,23 @@ export const AI_API_KEY = process.env.AI_API_KEY || process.env.OPENROUTER_API_K
 
 export const WIP_LIMIT = parseInt(process.env.WIP_LIMIT || '3', 10);
 
+// ─── Linear ──────────────────────────────────────────────────────────────────
+
+export const LINEAR_API_KEY = process.env.LINEAR_API_KEY || '';
+export const LINEAR_WEBHOOK_SECRET = process.env.LINEAR_WEBHOOK_SECRET || '';
+export const LINEAR_ENABLED = !!LINEAR_API_KEY;
+
+// Will be populated on startup by fetching from Linear API
+export let LINEAR_TEAMS = {};
+export function setLinearTeams(teams) { LINEAR_TEAMS = teams; }
+
+// Map Linear project names → Guardian profile keys
+export const LINEAR_PROJECT_MAP = {
+  'Браво': 'Браво',
+  'Клара': 'Клара',
+  'Инсайд': 'Инсайд',
+};
+
 export const PROJECT_ID = process.env.PROJECT_ID || 'PVT_kwDOEGF_kM4BUKVd';
 export const STATUS_FIELD_ID = process.env.STATUS_FIELD_ID || 'PVTSSF_lADOEGF_kM4BUKVdzhBUXxk';
 
@@ -224,6 +241,13 @@ export const GUARDIAN_PROFILES = {
     wipLimit: 5,
     autoMoveToBacklog: false,
   },
+};
+
+// Map Linear team keys → Guardian profile keys (for issues without a project)
+export const LINEAR_TEAM_PROFILE_MAP = {
+  SUR: 'СУР',
+  FD: 'ФД',
+  GEN: 'Head',
 };
 
 // ─── Kanban Statuses ─────────────────────────────────────────────────────────

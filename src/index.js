@@ -22,9 +22,15 @@ import {
   AI_API_KEY,
   AI_BASE_URL,
   AI_MODEL,
+  LINEAR_API_KEY,
+  LINEAR_WEBHOOK_SECRET,
+  LINEAR_ENABLED,
   setProjectConfig,
+  setLinearTeams,
 } from './config.js';
 import { resolveProjectForIssue, resolveProjectFromEvent } from './project-resolver.js';
+import { resolveLinearProject, resolveBacklogStateId } from './linear-resolver.js';
+import { createGitHubAdapter, createLinearAdapter } from './platform.js';
 
 import { runGuardian, isGuardianTrigger } from './guardian.js';
 import { handleMove, parseMoveCommand } from './move-handler.js';
@@ -32,6 +38,7 @@ import { handleAI, isAICommand } from './ai-handler.js';
 import { handleProtocol, isProtocolLabelAdded } from './protocol-handler.js';
 import { handleReport, isReportCommand } from './reports.js';
 import { fetchProjectConfig, getIssueComments, getIssue, getProjectItemForIssue, getStatusFieldOptions, updateProjectItemStatus } from './github-client.js';
+import { linearGetTeams, linearGetIssue, linearGetIssueComments } from './linear-client.js';
 
 // ─── App initialization ───────────────────────────────────────────────────────
 
@@ -119,16 +126,14 @@ async function handleIssueOpened(payload, octokit, graphqlFn) {
 
   const comments = await getIssueComments(octokit, owner, repo, issueNumber);
   const { projectStatus, resolved } = await getProjectContext(graphqlFn, owner, repo, issueNumber);
+  const platform = createGitHubAdapter(octokit, graphqlFn, { owner, repo, issueNumber, resolved });
 
-  await runGuardian(octokit, {
-    owner,
-    repo,
-    issueNumber,
+  await runGuardian({
     issue,
     projectStatus,
     comments,
-    graphqlFn,
     resolved,
+    platform,
   });
 }
 
@@ -140,16 +145,14 @@ async function handleIssueEdited(payload, octokit, graphqlFn) {
 
   const comments = await getIssueComments(octokit, owner, repo, issueNumber);
   const { projectStatus, resolved } = await getProjectContext(graphqlFn, owner, repo, issueNumber);
+  const platform = createGitHubAdapter(octokit, graphqlFn, { owner, repo, issueNumber, resolved });
 
-  await runGuardian(octokit, {
-    owner,
-    repo,
-    issueNumber,
+  await runGuardian({
     issue,
     projectStatus,
     comments,
-    graphqlFn,
     resolved,
+    platform,
   });
 }
 
@@ -199,15 +202,13 @@ async function handleIssueCommentCreated(payload, octokit, graphqlFn) {
     await handleAI(octokit, { owner, repo, issueNumber, issue });
     // Also run guardian in parallel
     const comments = await getIssueComments(octokit, owner, repo, issueNumber);
-    await runGuardian(octokit, {
-      owner,
-      repo,
-      issueNumber,
+    const platform = createGitHubAdapter(octokit, graphqlFn, { owner, repo, issueNumber, resolved });
+    await runGuardian({
       issue,
       projectStatus,
       comments,
-      graphqlFn,
       resolved,
+      platform,
     });
     return;
   }
@@ -215,15 +216,13 @@ async function handleIssueCommentCreated(payload, octokit, graphqlFn) {
   // Check for Guardian trigger
   if (isGuardianTrigger(commentBody)) {
     const comments = await getIssueComments(octokit, owner, repo, issueNumber);
-    await runGuardian(octokit, {
-      owner,
-      repo,
-      issueNumber,
+    const platform = createGitHubAdapter(octokit, graphqlFn, { owner, repo, issueNumber, resolved });
+    await runGuardian({
       issue,
       projectStatus,
       comments,
-      graphqlFn,
       resolved,
+      platform,
     });
   }
 }
@@ -372,15 +371,13 @@ async function handleProjectItemEvent(payload, octokit, graphqlFn) {
       currentStatus: projectStatus,
     } : null;
 
-    await runGuardian(octokit, {
-      owner,
-      repo,
-      issueNumber,
+    const platform = createGitHubAdapter(octokit, graphqlFn, { owner, repo, issueNumber, resolved });
+    await runGuardian({
       issue,
       projectStatus,
       comments,
-      graphqlFn,
       resolved,
+      platform,
     });
   } catch (err) {
     console.error(`[webhook] handleProjectItemEvent error: ${err.message}`, err.stack);
@@ -391,15 +388,14 @@ async function handleProjectItemEvent(payload, octokit, graphqlFn) {
 
 const server = express();
 
-// Raw body parser for webhook signature verification
-server.use(
-  '/github-app',
-  express.json({
-    verify: (req, res, buf) => {
-      req.rawBody = buf;
-    },
-  }),
-);
+// Raw body parser for webhook signature verification (GitHub + Linear)
+const rawBodyJsonParser = express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  },
+});
+server.use('/github-app', rawBodyJsonParser);
+server.use('/linear-webhook', rawBodyJsonParser);
 
 // Health check
 server.get('/health', (_req, res) => {
@@ -478,6 +474,184 @@ server.post('/github-app', async (req, res) => {
   });
 });
 
+// ─── Linear webhook signature verification ──────────────────────────────────
+
+function verifyLinearSignature(secret, payload, signature) {
+  if (!secret || !signature) return false;
+  const hmac = crypto.createHmac('sha256', secret);
+  hmac.update(payload);
+  const digest = hmac.digest('hex');
+  try {
+    return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(signature));
+  } catch {
+    return false;
+  }
+}
+
+// ─── Linear webhook event handlers ───────────────────────────────────────────
+
+/**
+ * Handle Linear issue create/update events.
+ * Resolves Guardian profile from team + project, creates Linear adapter, runs Guardian.
+ */
+async function handleLinearIssueEvent(webhookPayload) {
+  try {
+    const { data: issueData, action } = webhookPayload;
+    if (!issueData?.id) {
+      console.warn('[linear-webhook] Issue event with no issue ID');
+      return;
+    }
+
+    // Fetch full issue data from API (webhook data may be partial)
+    const fullIssue = await linearGetIssue(issueData.id);
+    if (!fullIssue) {
+      console.warn(`[linear-webhook] Could not fetch issue ${issueData.id}`);
+      return;
+    }
+
+    // Resolve Guardian profile
+    const projectKey = resolveLinearProject(fullIssue);
+    const teamId = fullIssue.team?.id;
+    const stateName = fullIssue.state?.name || 'Backlog';
+    const backlogStateId = teamId ? resolveBacklogStateId(teamId) : null;
+
+    // Build issue object compatible with Guardian
+    const issue = {
+      title: fullIssue.title || '',
+      body: fullIssue.description || '',
+      state: fullIssue.state?.name || '',
+      updated_at: fullIssue.updatedAt || new Date().toISOString(),
+      dueDate: fullIssue.dueDate || null,
+      labels: (fullIssue.labels?.nodes || []).map((l) => ({ name: l.name })),
+      assignees: fullIssue.assignee
+        ? [{ id: fullIssue.assignee.id, name: fullIssue.assignee.name, displayName: fullIssue.assignee.displayName }]
+        : [],
+    };
+
+    // Get comments
+    const comments = await linearGetIssueComments(issueData.id);
+
+    // Create platform adapter
+    const platform = createLinearAdapter({
+      issueId: issueData.id,
+      teamId,
+      backlogStateId,
+    });
+
+    const resolved = { key: projectKey };
+
+    console.log(`[linear-webhook] Issue ${action}: ${fullIssue.title} (project: ${projectKey || 'unknown'}, state: ${stateName})`);
+
+    await runGuardian({
+      issue,
+      projectStatus: stateName,
+      comments,
+      resolved,
+      platform,
+    });
+  } catch (err) {
+    console.error(`[linear-webhook] handleLinearIssueEvent error: ${err.message}`, err.stack);
+  }
+}
+
+/**
+ * Handle Linear comment create events.
+ * Checks for slash commands (/guardian, /ai, /report, /move) or triggers Guardian.
+ */
+async function handleLinearCommentEvent(webhookPayload) {
+  try {
+    const { data: commentData } = webhookPayload;
+    const commentBody = commentData?.body || '';
+    const issueId = commentData?.issueId || commentData?.issue?.id;
+
+    if (!issueId) {
+      console.warn('[linear-webhook] Comment event with no issue ID');
+      return;
+    }
+
+    // Skip bot's own comments (actor check)
+    // Linear doesn't have a "Bot" type, so we skip by checking if the actor
+    // is the API key owner — for now, check if comment contains our marker
+    if (commentBody.includes('<!-- guardian-check -->')) return;
+
+    // Check for Guardian trigger
+    if (isGuardianTrigger(commentBody)) {
+      // Fetch full issue and run Guardian
+      const fullIssue = await linearGetIssue(issueId);
+      if (!fullIssue) return;
+
+      const projectKey = resolveLinearProject(fullIssue);
+      const teamId = fullIssue.team?.id;
+      const stateName = fullIssue.state?.name || 'Backlog';
+      const backlogStateId = teamId ? resolveBacklogStateId(teamId) : null;
+
+      const issue = {
+        title: fullIssue.title || '',
+        body: fullIssue.description || '',
+        state: fullIssue.state?.name || '',
+        updated_at: fullIssue.updatedAt || new Date().toISOString(),
+        dueDate: fullIssue.dueDate || null,
+        labels: (fullIssue.labels?.nodes || []).map((l) => ({ name: l.name })),
+        assignees: fullIssue.assignee
+          ? [{ id: fullIssue.assignee.id, name: fullIssue.assignee.name, displayName: fullIssue.assignee.displayName }]
+          : [],
+      };
+
+      const comments = await linearGetIssueComments(issueId);
+      const platform = createLinearAdapter({ issueId, teamId, backlogStateId });
+
+      await runGuardian({
+        issue,
+        projectStatus: stateName,
+        comments,
+        resolved: { key: projectKey },
+        platform,
+      });
+    }
+  } catch (err) {
+    console.error(`[linear-webhook] handleLinearCommentEvent error: ${err.message}`, err.stack);
+  }
+}
+
+// ─── Linear webhook endpoint ─────────────────────────────────────────────────
+
+server.post('/linear-webhook', async (req, res) => {
+  // 1. Verify signature
+  const signature = req.headers['linear-signature'];
+  if (!verifyLinearSignature(LINEAR_WEBHOOK_SECRET, req.rawBody, signature)) {
+    console.warn('[linear-webhook] Invalid signature');
+    return res.sendStatus(401);
+  }
+
+  // 2. Check timestamp freshness (reject if > 60s old)
+  const webhookTimestamp = req.body?.webhookTimestamp;
+  if (webhookTimestamp && Math.abs(Date.now() - webhookTimestamp) > 60_000) {
+    console.warn('[linear-webhook] Stale timestamp');
+    return res.sendStatus(401);
+  }
+
+  // Respond immediately
+  res.sendStatus(200);
+
+  // 3. Process async
+  setImmediate(async () => {
+    try {
+      const { action, type } = req.body;
+      console.log(`[linear-webhook] Event: type=${type}, action=${action}`);
+
+      if (type === 'Issue' && (action === 'create' || action === 'update')) {
+        await handleLinearIssueEvent(req.body);
+      } else if (type === 'Comment' && action === 'create') {
+        await handleLinearCommentEvent(req.body);
+      } else {
+        console.log(`[linear-webhook] Unhandled: type=${type}, action=${action}`);
+      }
+    } catch (err) {
+      console.error(`[linear-webhook] Processing error: ${err.message}`, err.stack);
+    }
+  });
+});
+
 // 404 handler
 server.use((_req, res) => {
   res.status(404).json({ error: 'Not found' });
@@ -500,15 +674,31 @@ async function bootstrap() {
     console.warn(`[boot] Could not fetch PROJECT.json: ${err.message}`);
   }
 
+  // Bootstrap Linear: fetch teams and workflow states
+  if (LINEAR_API_KEY) {
+    try {
+      const teams = await linearGetTeams();
+      setLinearTeams(teams);
+      console.log(`[boot] Linear: ${Object.keys(teams).length} teams loaded (${Object.keys(teams).join(', ')})`);
+    } catch (err) {
+      console.warn(`[boot] Could not bootstrap Linear: ${err.message}`);
+    }
+  }
+
   server.listen(PORT, () => {
     console.log(`[boot] bravo-kanban-bot listening on port ${PORT}`);
-    console.log(`[boot] Webhook endpoint: POST /github-app`);
-    console.log(`[boot] Health check:     GET  /health`);
+    console.log(`[boot] Webhook endpoints: POST /github-app, POST /linear-webhook`);
+    console.log(`[boot] Health check:      GET  /health`);
     console.log(`[boot] Org: ${GITHUB_ORG} | Repos: ${GUARDIAN_REPOS.join(', ')}`);
     if (AI_API_KEY) {
       console.log(`[boot] AI: ${AI_BASE_URL} | Model: ${AI_MODEL} | Key: ${AI_API_KEY.slice(0, 8)}…`);
     } else {
       console.error('[boot] ⚠️ AI_API_KEY is NOT set — protocol parsing and AI checks will not work!');
+    }
+    if (LINEAR_ENABLED) {
+      console.log(`[boot] Linear: ENABLED (key: ${LINEAR_API_KEY.slice(0, 8)}…)`);
+    } else {
+      console.log('[boot] Linear: DISABLED (no LINEAR_API_KEY)');
     }
   });
 }

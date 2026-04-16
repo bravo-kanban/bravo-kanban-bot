@@ -14,19 +14,10 @@ import {
   DEADLINE_MARKERS,
   DOD_MARKERS,
   WIP_LIMIT,
-  GUARDIAN_REPOS,
   GUARDIAN_PROFILES,
-  GITHUB_ORG,
   STATUS_FORWARD_ORDER,
   nowMoscow,
 } from './config.js';
-import {
-  postComment,
-  updateComment,
-  countInProgressForAssignee,
-  getStatusFieldOptions,
-  updateProjectItemStatus,
-} from './github-client.js';
 import {
   checkAtomicityLLM,
   checkSmartLLM,
@@ -48,18 +39,20 @@ const MARKER = '<!-- guardian-check -->';
 // The 30s debounce window resets after the run completes, so any follow-up
 // webhook event within 30s of completion is suppressed.
 
-const recentGuardianRuns = new Map(); // key: "owner/repo#number" → timestamp
+const recentGuardianRuns = new Map(); // key: issueKey → timestamp
 const DEBOUNCE_MS = 30_000; // 30 seconds after last activity
 
-function shouldDebounce(owner, repo, issueNumber) {
-  const key = `${owner}/${repo}#${issueNumber}`;
-  const lastRun = recentGuardianRuns.get(key);
+/**
+ * @param {string} issueKey — platform-specific key, e.g. "owner/repo#number" or "linear#issueId"
+ */
+function shouldDebounce(issueKey) {
+  const lastRun = recentGuardianRuns.get(issueKey);
   const now = Date.now();
   if (lastRun && now - lastRun < DEBOUNCE_MS) {
-    console.log(`[guardian] Debounce: skipping ${key} (ran ${now - lastRun}ms ago)`);
+    console.log(`[guardian] Debounce: skipping ${issueKey} (ran ${now - lastRun}ms ago)`);
     return true;
   }
-  recentGuardianRuns.set(key, now);
+  recentGuardianRuns.set(issueKey, now);
   // Cleanup old entries
   if (recentGuardianRuns.size > 100) {
     for (const [k, v] of recentGuardianRuns) {
@@ -70,9 +63,8 @@ function shouldDebounce(owner, repo, issueNumber) {
 }
 
 /** Refresh debounce timestamp (call after run completes). */
-function refreshDebounce(owner, repo, issueNumber) {
-  const key = `${owner}/${repo}#${issueNumber}`;
-  recentGuardianRuns.set(key, Date.now());
+function refreshDebounce(issueKey) {
+  recentGuardianRuns.set(issueKey, Date.now());
 }
 
 // ─── Default profile (fallback when project has no profile) ──────────────────
@@ -201,7 +193,8 @@ function checkSingleOwner(issue, status) {
       comment: `Назначено ${assignees.length} исполнителя — допустим только один`,
     };
   }
-  return { pass: true, comment: `Исполнитель: @${assignees[0].login}` };
+  const label = assignees[0].login ? `@${assignees[0].login}` : (assignees[0].name || assignees[0].displayName || 'unknown');
+  return { pass: true, comment: `Исполнитель: ${label}` };
 }
 
 // ─── Check 4: Deadline ────────────────────────────────────────────────────────
@@ -212,6 +205,19 @@ function checkDeadline(issue, status) {
 
   if (idx === 0) {
     return { pass: true, comment: 'Backlog: дедлайн необязателен', type: 'na' };
+  }
+
+  // Linear provides dueDate as a top-level field (YYYY-MM-DD)
+  if (issue.dueDate) {
+    try {
+      const dateObj = new Date(issue.dueDate);
+      if (!isNaN(dateObj.getTime())) {
+        if (dateObj < new Date()) {
+          return { pass: true, warn: true, comment: `\u26A0 Дедлайн ${issue.dueDate} уже прошёл` };
+        }
+        return { pass: true, comment: `Дедлайн: ${issue.dueDate}` };
+      }
+    } catch { /* fallthrough to body regex */ }
   }
 
   let foundDate = null;
@@ -295,18 +301,20 @@ function checkStatusTransparency(issue, comments, status) {
 
 // ─── Check 6: WIP Limit ───────────────────────────────────────────────────────
 
-async function checkWipLimit(octokit, issue, profileWipLimit) {
+async function checkWipLimit(platform, issue, profileWipLimit) {
   const assignees = issue.assignees || [];
   if (assignees.length === 0) {
     return { pass: true, comment: 'Нет исполнителя — WIP не проверяется', type: 'na' };
   }
 
-  const assigneeLogin = assignees[0].login;
+  // For GitHub: assignee.login; for Linear: assignee.id
+  const assigneeIdentifier = assignees[0].login || assignees[0].id;
+  const assigneeLabel = assignees[0].login ? `@${assignees[0].login}` : (assignees[0].name || assignees[0].displayName || assigneeIdentifier);
   const limit = profileWipLimit ?? WIP_LIMIT;
 
   let wipCount = 0;
   try {
-    wipCount = await countInProgressForAssignee(octokit, GITHUB_ORG, GUARDIAN_REPOS, assigneeLogin);
+    wipCount = await platform.countInProgress(assigneeIdentifier);
   } catch (err) {
     return { pass: true, comment: `Не удалось проверить WIP: ${err.message}`, type: 'warn' };
   }
@@ -314,11 +322,11 @@ async function checkWipLimit(octokit, issue, profileWipLimit) {
   if (wipCount >= limit) {
     return {
       pass: false,
-      comment: `@${assigneeLogin} уже имеет ${wipCount} задач In Progress (лимит: ${limit})`,
+      comment: `${assigneeLabel} уже имеет ${wipCount} задач In Progress (лимит: ${limit})`,
     };
   }
 
-  return { pass: true, comment: `WIP @${assigneeLogin}: ${wipCount}/${limit}` };
+  return { pass: true, comment: `WIP ${assigneeLabel}: ${wipCount}/${limit}` };
 }
 
 // ─── Check 7: Definition of Done ─────────────────────────────────────────────
@@ -425,22 +433,19 @@ function fmtStatus(result) {
 /**
  * Run commandment checks using per-project Guardian profile and post a comment.
  *
- * @param {import('@octokit/rest').Octokit} octokit
  * @param {object} params
- * @param {string} params.owner
- * @param {string} params.repo
- * @param {number} params.issueNumber
  * @param {object} params.issue — full issue object
  * @param {string} [params.projectStatus] — current project status column name
  * @param {Array} params.comments — existing comments
- * @param {Function} [params.graphqlFn] — authenticated graphql function for project mutations
- * @param {object} [params.resolved] — resolved project context
+ * @param {object} [params.resolved] — resolved project context (must include .key)
+ * @param {object} params.platform — platform adapter (see platform.js)
  */
-export async function runGuardian(octokit, { owner, repo, issueNumber, issue, projectStatus, comments, graphqlFn, resolved }) {
+export async function runGuardian({ issue, projectStatus, comments, resolved, platform }) {
+  const issueKey = platform.issueKey;
   try {
     // Global debounce — prevents duplicate comments when multiple webhook events
     // fire for the same issue (e.g. issues.opened + projects_v2_item.edited)
-    if (shouldDebounce(owner, repo, issueNumber)) {
+    if (shouldDebounce(issueKey)) {
       return;
     }
 
@@ -459,15 +464,14 @@ export async function runGuardian(octokit, { owner, repo, issueNumber, issue, pr
 
     // Skip Guardian for Backlog tasks — no point checking until they move forward
     if (status === 'Backlog') {
-      console.log(`[guardian] Skipping ${owner}/${repo}#${issueNumber} — status is Backlog`);
+      console.log(`[guardian] Skipping ${issueKey} — status is Backlog`);
       return;
     }
 
-    console.log(`[guardian] Checking ${owner}/${repo}#${issueNumber} (project: ${projectKey || 'unknown'}, status: ${status})`);
+    console.log(`[guardian] Checking ${issueKey} (project: ${projectKey || 'unknown'}, status: ${status})`);
 
     // Post "thinking" indicator (always a new comment)
-    const thinkingComment = await postComment(
-      octokit, owner, repo, issueNumber,
+    const thinkingComment = await platform.postComment(
       `${MARKER}\n## 🛡️ Guardian проверяет...  *(${projectKey || 'default'})*\n\nАнализирую задачу. Это может занять до 60 секунд.`,
     );
     const guardianCommentId = thinkingComment?.id;
@@ -491,7 +495,7 @@ export async function runGuardian(octokit, { owner, repo, issueNumber, issue, pr
 
     const c3 = pc.singleOwner.enabled ? checkSingleOwner(issue, status) : skipped('singleOwner');
     const c4 = pc.deadline.enabled    ? checkDeadline(issue, status)    : skipped('deadline');
-    const c6 = pc.wipLimit.enabled    ? await checkWipLimit(octokit, issue, profile.wipLimit) : skipped('wipLimit');
+    const c6 = pc.wipLimit.enabled    ? await checkWipLimit(platform, issue, profile.wipLimit) : skipped('wipLimit');
 
     const results = [c1, c2, c3, c4, c5, c6, c7, c8, c9];
 
@@ -579,27 +583,18 @@ ${routingBlock}
 
     // Update the thinking comment with results
     if (guardianCommentId) {
-      await updateComment(octokit, owner, repo, guardianCommentId, commentBody);
+      await platform.updateComment(guardianCommentId, commentBody);
     } else {
-      await postComment(octokit, owner, repo, issueNumber, commentBody);
+      await platform.postComment(commentBody);
     }
 
     // ─── Auto-move to Backlog if blocked (per profile) ────────────────────
 
-    if (blockingFails.length > 0 && profile.autoMoveToBacklog && status !== 'Backlog' && graphqlFn && resolved) {
+    if (blockingFails.length > 0 && profile.autoMoveToBacklog && status !== 'Backlog') {
       try {
-        const pId = resolved.projectId;
-        const sfId = resolved.statusFieldId;
-        const iId = resolved.itemId;
-        if (iId) {
-          const options = await getStatusFieldOptions(graphqlFn, pId, sfId);
-          const backlogOption = options.find((o) => o.name.toLowerCase().includes('backlog'));
-          if (backlogOption) {
-            const moved = await updateProjectItemStatus(graphqlFn, pId, iId, sfId, backlogOption.id);
-            if (moved) {
-              console.log(`[guardian] Moved ${owner}/${repo}#${issueNumber} back to Backlog in ${projectKey}`);
-            }
-          }
+        const moved = await platform.moveToBacklog();
+        if (moved) {
+          console.log(`[guardian] Moved ${issueKey} back to Backlog in ${projectKey}`);
         }
       } catch (moveErr) {
         console.warn(`[guardian] Could not move to Backlog: ${moveErr.message}`);
@@ -608,13 +603,13 @@ ${routingBlock}
 
     // Refresh debounce AFTER run completes so the 30s window starts now,
     // not from when the run started (which could be 60–90s ago).
-    refreshDebounce(owner, repo, issueNumber);
+    refreshDebounce(issueKey);
 
     console.log(`[guardian] Done. Project: ${projectKey}, Verdict: ${verdict}`);
   } catch (err) {
     console.error(`[guardian] runGuardian error: ${err.message}`);
     // Still refresh debounce on error to prevent retry storms
-    refreshDebounce(owner, repo, issueNumber);
+    refreshDebounce(issueKey);
   }
 }
 

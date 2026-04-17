@@ -199,10 +199,10 @@ async function handleIssueCommentCreated(payload, octokit, graphqlFn) {
 
   // Check for /ai command
   if (isAICommand(commentBody)) {
-    await handleAI(octokit, { owner, repo, issueNumber, issue });
+    const platform = createGitHubAdapter(octokit, graphqlFn, { owner, repo, issueNumber, resolved });
+    await handleAI({ issue, platform, commentBody });
     // Also run guardian in parallel
     const comments = await getIssueComments(octokit, owner, repo, issueNumber);
-    const platform = createGitHubAdapter(octokit, graphqlFn, { owner, repo, issueNumber, resolved });
     await runGuardian({
       issue,
       projectStatus,
@@ -589,34 +589,46 @@ async function handleLinearCommentEvent(webhookPayload) {
     // Skip bot's own comments (actor check)
     // Linear doesn't have a "Bot" type, so we skip by checking if the actor
     // is the API key owner — for now, check if comment contains our marker
-    if (commentBody.includes('<!-- guardian-check -->')) return;
+    if (commentBody.includes('<!-- guardian-check -->') || commentBody.includes('<!-- ai-analysis -->')) return;
 
-    // Check for Guardian trigger
-    if (isGuardianTrigger(commentBody)) {
-      // Fetch full issue and run Guardian
-      const fullIssue = await linearGetIssue(issueId);
-      if (!fullIssue) return;
+    // Determine if we need to fetch issue data (for /ai or /guardian)
+    const needsAI = isAICommand(commentBody);
+    const needsGuardian = isGuardianTrigger(commentBody);
 
-      const projectKey = resolveLinearProject(fullIssue);
-      const teamId = fullIssue.team?.id;
-      const stateName = fullIssue.state?.name || 'Backlog';
-      const backlogStateId = teamId ? resolveBacklogStateId(teamId) : null;
+    if (!needsAI && !needsGuardian) return;
 
-      const issue = {
-        title: fullIssue.title || '',
-        body: fullIssue.description || '',
-        state: fullIssue.state?.name || '',
-        updated_at: fullIssue.updatedAt || new Date().toISOString(),
-        dueDate: fullIssue.dueDate || null,
-        labels: (fullIssue.labels?.nodes || []).map((l) => ({ name: l.name })),
-        assignees: fullIssue.assignee
-          ? [{ id: fullIssue.assignee.id, name: fullIssue.assignee.name, displayName: fullIssue.assignee.displayName }]
-          : [],
-      };
+    // Fetch full issue — needed for both /ai and /guardian
+    const fullIssue = await linearGetIssue(issueId);
+    if (!fullIssue) return;
 
+    const projectKey = resolveLinearProject(fullIssue);
+    const teamId = fullIssue.team?.id;
+    const stateName = fullIssue.state?.name || 'Backlog';
+    const backlogStateId = teamId ? resolveBacklogStateId(teamId) : null;
+
+    const issue = {
+      title: fullIssue.title || '',
+      body: fullIssue.description || '',
+      state: fullIssue.state?.name || '',
+      updated_at: fullIssue.updatedAt || new Date().toISOString(),
+      dueDate: fullIssue.dueDate || null,
+      labels: (fullIssue.labels?.nodes || []).map((l) => ({ name: l.name })),
+      assignees: fullIssue.assignee
+        ? [{ id: fullIssue.assignee.id, name: fullIssue.assignee.name, displayName: fullIssue.assignee.displayName }]
+        : [],
+    };
+
+    const platform = createLinearAdapter({ issueId, teamId, backlogStateId });
+
+    // Handle /ai command
+    if (needsAI) {
+      console.log(`[linear-webhook] /ai command on ${fullIssue.identifier}`);
+      await handleAI({ issue, platform, commentBody });
+    }
+
+    // Handle Guardian trigger
+    if (needsGuardian) {
       const comments = await linearGetIssueComments(issueId);
-      const platform = createLinearAdapter({ issueId, teamId, backlogStateId });
-
       await runGuardian({
         issue,
         projectStatus: stateName,

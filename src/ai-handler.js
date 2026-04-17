@@ -2,11 +2,16 @@
  * ai-handler.js — /ai command handler
  *
  * Analyzes the issue and posts a structured analysis comment.
+ * Works with both GitHub and Linear via the platform adapter.
+ *
+ * Usage:
+ *   /ai                    — analyze the issue (priority, type, complexity)
+ *   /ai <вопрос>           — ask a free-form question about the issue
+ *   @ai <вопрос>           — same as above
  */
 
 import { nowMoscow } from './config.js';
-import { analyzeIssueLLM } from './llm-client.js';
-import { postComment, updateComment } from './github-client.js';
+import { analyzeIssueLLM, callLLM } from './llm-client.js';
 
 const AI_MARKER = '<!-- ai-analysis -->';
 
@@ -76,28 +81,106 @@ function complexityBadge(c) {
   }
 }
 
-// ─── Main AI handler ──────────────────────────────────────────────────────────
+// ─── Extract user question from /ai command ──────────────────────────────────
+
+/**
+ * Extract the user's question from a /ai or @ai comment.
+ * Returns null if it's just "/ai" with no question.
+ * @param {string} body
+ * @returns {string|null}
+ */
+function extractAIQuestion(body) {
+  if (!body) return null;
+  const match = body.match(/[\/\\@]ai\s+(.+)/is);
+  if (!match) return null;
+  const question = match[1].trim();
+  return question.length > 0 ? question : null;
+}
+
+// ─── Free-form AI Q&A ─────────────────────────────────────────────────────────
+
+/**
+ * Answer a free-form user question in the context of an issue.
+ * @param {object} params
+ * @param {string} params.question — user's question text
+ * @param {string} params.title — issue title
+ * @param {string} params.body — issue body/description
+ * @param {object} params.platform — platform adapter
+ */
+async function handleAIQuestion({ question, title, body, platform }) {
+  // Post "thinking" comment
+  const thinkingComment = await platform.postComment(
+    `${AI_MARKER}\n## 🤖 AI думает...\n\nОбрабатываю вопрос. Это может занять до 60 секунд.`,
+  );
+  const thinkingId = thinkingComment?.id;
+
+  try {
+    const messages = [
+      {
+        role: 'system',
+        content: 'Ты AI-помощник команды. Отвечай на русском языке, кратко и по делу. Ты находишься в контексте задачи в kanban-системе.',
+      },
+      {
+        role: 'user',
+        content: `Контекст задачи:\nЗаголовок: "${title}"\nОписание: "${body?.slice(0, 2000) || 'пусто'}"\n\nВопрос: ${question}`,
+      },
+    ];
+
+    const answer = await callLLM(messages, { maxTokens: 1000, temperature: 0.5 });
+
+    const resultBody = answer
+      ? `${AI_MARKER}\n## 🤖 AI-ответ\n\n*${nowMoscow()}*\n\n> ${question}\n\n${answer}\n\n---\n*Для нового вопроса напишите \`/ai <вопрос>\`*`
+      : `${AI_MARKER}\n## ❌ AI недоступен\n\nНе удалось получить ответ от AI. Попробуйте позже.`;
+
+    if (thinkingId) {
+      await platform.updateComment(thinkingId, resultBody);
+    } else {
+      await platform.postComment(resultBody);
+    }
+    console.log(`[ai] Answered question on ${platform.issueKey}`);
+  } catch (err) {
+    console.error(`[ai] handleAIQuestion error: ${err.message}`);
+    const errBody = `${AI_MARKER}\n## ❌ Ошибка AI\n\n${err.message}`;
+    if (thinkingId) {
+      await platform.updateComment(thinkingId, errBody).catch(() => {});
+    } else {
+      await platform.postComment(errBody).catch(() => {});
+    }
+  }
+}
+
+// ─── Main AI handler (issue analysis) ────────────────────────────────────────
 
 /**
  * Handle /ai command on an issue.
+ * Uses the platform adapter for posting comments (works with both GitHub and Linear).
  *
- * @param {import('@octokit/rest').Octokit} octokit
  * @param {object} params
- * @param {string} params.owner
- * @param {string} params.repo
- * @param {number} params.issueNumber
- * @param {object} params.issue
+ * @param {object} params.issue — { title, body }
+ * @param {object} params.platform — platform adapter (postComment, updateComment)
+ * @param {string} [params.commentBody] — the original comment with /ai command (to extract question)
  */
-export async function handleAI(octokit, { owner, repo, issueNumber, issue }) {
+export async function handleAI({ issue, platform, commentBody }) {
+  // Check if user asked a specific question
+  const question = extractAIQuestion(commentBody);
+  if (question) {
+    return handleAIQuestion({
+      question,
+      title: issue.title || '',
+      body: issue.body || '',
+      platform,
+    });
+  }
+
+  // Default: analyze the issue
   try {
     const title = issue.title || '';
     const body = issue.body || '';
 
-    console.log(`[ai] Analyzing ${owner}/${repo}#${issueNumber}`);
+    console.log(`[ai] Analyzing ${platform.issueKey}`);
 
     // Post "thinking" comment (new comment every time)
-    const thinkingComment = await postComment(
-      octokit, owner, repo, issueNumber,
+    const thinkingComment = await platform.postComment(
       `${AI_MARKER}\n## 🤖 AI думает...\n\nАнализирую задачу. Это может занять до 60 секунд.`,
     );
     const thinkingId = thinkingComment?.id;
@@ -114,20 +197,19 @@ export async function handleAI(octokit, { owner, repo, issueNumber, issue }) {
 
     const { priority, type, complexity, summary } = analysis;
 
-    const commentBody = `${AI_MARKER}\n## 🤖 AI-анализ задачи\n\n*Проверено: ${nowMoscow()}*\n\n| Параметр | Значение |\n|---|---|\n| 🎯 Приоритет | ${priorityBadge(priority)} |\n| 🏷️ Тип | ${typeBadge(type)} |\n| 📊 Сложность | ${complexityBadge(complexity)} |\n\n### 📝 Резюме\n${summary}\n\n---\n*Анализ выполнен автоматически. Для повторного анализа напишите \`/ai\` или \`@ai\` в комментарии.*`;
+    const resultBody = `${AI_MARKER}\n## 🤖 AI-анализ задачи\n\n*Проверено: ${nowMoscow()}*\n\n| Параметр | Значение |\n|---|---|\n| 🎯 Приоритет | ${priorityBadge(priority)} |\n| 🏷️ Тип | ${typeBadge(type)} |\n| 📊 Сложность | ${complexityBadge(complexity)} |\n\n### 📝 Резюме\n${summary}\n\n---\n*Анализ выполнен автоматически. Для повторного анализа напишите \`/ai\`, для вопроса — \`/ai <вопрос>\`.*`;
 
     // Replace "thinking" with result
     if (thinkingId) {
-      await updateComment(octokit, owner, repo, thinkingId, commentBody);
+      await platform.updateComment(thinkingId, resultBody);
     } else {
-      await postComment(octokit, owner, repo, issueNumber, commentBody);
+      await platform.postComment(resultBody);
     }
-    console.log(`[ai] Posted analysis for ${owner}/${repo}#${issueNumber}`);
+    console.log(`[ai] Posted analysis for ${platform.issueKey}`);
   } catch (err) {
     console.error(`[ai] handleAI error: ${err.message}`);
     try {
-      await postComment(
-        octokit, owner, repo, issueNumber,
+      await platform.postComment(
         `${AI_MARKER}\n## ❌ Ошибка AI-анализа\n\n${err.message}`,
       );
     } catch {
@@ -143,5 +225,5 @@ export async function handleAI(octokit, { owner, repo, issueNumber, issue }) {
  */
 export function isAICommand(body) {
   if (!body) return false;
-  return /[\/\@]ai\b/i.test(body);
+  return /[\/\\@]ai\b/i.test(body);
 }

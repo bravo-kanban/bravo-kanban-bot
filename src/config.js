@@ -63,12 +63,12 @@ export const PRIVATE_KEY = loadPrivateKey();
 
 // ─── AI Provider ─────────────────────────────────────────────────────────────
 
-export const AI_PROVIDER = process.env.AI_PROVIDER || 'awstore';
-export const AI_BASE_URL = process.env.AI_BASE_URL || 'https://api.awstore.cloud';
-export const AI_MODEL = process.env.AI_MODEL || 'claude-sonnet-4.5';
+export const AI_PROVIDER = process.env.AI_PROVIDER || 'proxyapi';
+export const AI_BASE_URL = process.env.AI_BASE_URL || 'https://api.proxyapi.ru/openai';
+export const AI_MODEL = process.env.AI_MODEL || 'gpt-4.1';
 
 // Fallback model (same provider)
-export const AI_MODEL_FALLBACK = process.env.AI_MODEL_FALLBACK || 'claude-sonnet-4';
+export const AI_MODEL_FALLBACK = process.env.AI_MODEL_FALLBACK || 'gpt-4.1-mini';
 
 // ─── Multi-project configuration ─────────────────────────────────────────────
 

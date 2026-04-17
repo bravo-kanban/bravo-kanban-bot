@@ -590,7 +590,12 @@ ${routingBlock}
 
     // ─── Auto-move to Backlog if blocked (per profile) ────────────────────
 
-    if (blockingFails.length > 0 && profile.autoMoveToBacklog && status !== 'Backlog') {
+    const guardianPaused = process.env.GUARDIAN_PAUSE === 'true';
+    if (guardianPaused) {
+      console.log(`[guardian] PAUSED — skip auto-move for ${issueKey}`);
+    }
+
+    if (!guardianPaused && blockingFails.length > 0 && profile.autoMoveToBacklog && status !== 'Backlog') {
       try {
         const moved = await platform.moveToBacklog();
         if (moved) {

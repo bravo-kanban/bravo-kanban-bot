@@ -69,6 +69,12 @@ export function createGitHubAdapter(octokit, graphqlFn, { owner, repo, issueNumb
       const { countInProgressForAssignee } = await import('./github-client.js');
       return countInProgressForAssignee(octokit, GITHUB_ORG, GUARDIAN_REPOS, assigneeLogin);
     },
+
+    setDueDate: async (_dueDate) => {
+      // GitHub Projects don't have a native dueDate field — no-op
+      console.log('[platform:github] setDueDate not supported on GitHub');
+      return false;
+    },
   };
 }
 
@@ -112,6 +118,11 @@ export function createLinearAdapter({ issueId, teamId, backlogStateId }) {
     countInProgress: async (assigneeId) => {
       const { linearCountInProgressForAssignee } = await import('./linear-client.js');
       return linearCountInProgressForAssignee(assigneeId, teamId);
+    },
+
+    setDueDate: async (dueDate) => {
+      const { linearSetDueDate } = await import('./linear-client.js');
+      return linearSetDueDate(issueId, dueDate);
     },
   };
 }

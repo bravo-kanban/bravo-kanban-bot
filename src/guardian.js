@@ -23,10 +23,30 @@ import {
   checkSmartLLM,
   checkDoDLLM,
   checkInSystemLLM,
+  generateFixSuggestions,
 } from './llm-client.js';
 import { suggestRouting } from './team-routing.js';
 
 const MARKER = '<!-- guardian-check -->';
+
+// ─── Business-day arithmetic (Moscow timezone, skips Sat/Sun) ────────────────
+
+/**
+ * Add N business days (Mon-Fri) to a date. Returns YYYY-MM-DD string.
+ * @param {Date} from — start date
+ * @param {number} days — business days to add
+ * @returns {string} YYYY-MM-DD
+ */
+function addBusinessDays(from, days) {
+  const d = new Date(from);
+  let added = 0;
+  while (added < days) {
+    d.setDate(d.getDate() + 1);
+    const dow = d.getDay(); // 0=Sun, 6=Sat
+    if (dow !== 0 && dow !== 6) added++;
+  }
+  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+}
 
 // ─── Debounce — prevents duplicate runs from overlapping webhook events ──────
 //
@@ -567,6 +587,97 @@ export async function runGuardian({ issue, projectStatus, comments, resolved, pl
       ? `**Рекомендуемый исполнитель:** **${routing.id}** (${routing.name})\n**Обоснование:** ${routing.reasoning}`
       : `**Рекомендуемый исполнитель:** не удалось определить`;
 
+    // ─── Auto-fix: set deadline +5 business days if missing ───────────────
+
+    let autoDeadlineBlock = '';
+    const deadlineResult = results[3]; // c4 = deadline check
+    if (!deadlineResult.pass && !issue.dueDate && pc.deadline.enabled) {
+      try {
+        const newDueDate = addBusinessDays(new Date(), 5);
+        const ok = await platform.setDueDate(newDueDate);
+        if (ok) {
+          autoDeadlineBlock = `\n> ✅ **Авто-дедлайн:** установлен **${newDueDate}** (+5 рабочих дней)\n`;
+          // Update the local result so verdict reflects the fix
+          results[3] = { pass: true, comment: `Авто-дедлайн установлен: ${newDueDate}` };
+          console.log(`[guardian] Auto-set dueDate=${newDueDate} for ${issueKey}`);
+        }
+      } catch (err) {
+        console.warn(`[guardian] Failed to auto-set deadline: ${err.message}`);
+      }
+    }
+
+    // ─── Re-evaluate verdict after auto-fixes ─────────────────────────────
+
+    const blockingFailsAfterFix = results.filter((r, i) => {
+      if (r.type === 'na' || r.type === 'skipped') return false;
+      if (r.pass) return false;
+      const checkCfg = pc[checkIds[i]];
+      return checkCfg?.enabled && checkCfg?.type === 'block';
+    });
+
+    const warningsAfterFix = results.filter((r, i) => {
+      if (r.type === 'na' || r.type === 'skipped') return false;
+      if (!r.pass && pc[checkIds[i]]?.type === 'warn') return true;
+      if (r.pass && r.warn) return true;
+      return false;
+    });
+
+    if (blockingFailsAfterFix.length < blockingFails.length) {
+      // Recalculate verdict
+      if (blockingFailsAfterFix.length > 0) {
+        verdict = '🚫 BLOCKED';
+      } else if (warningsAfterFix.length > 0) {
+        verdict = '⚠️ PASSED WITH WARNINGS';
+      } else {
+        verdict = '✅ PASSED';
+      }
+      // Rebuild table with updated results
+      table = '| # | Заповедь | Тип | Статус | Комментарий |\n|---|---|---|---|---|\n';
+      results.forEach((r, i) => {
+        table += `| ${i + 1} | ${names[i]} | ${typeLabels[i]} | ${fmtStatus(r)} | ${r.comment} |\n`;
+      });
+    }
+
+    // ─── AI suggestions for remaining failures ────────────────────────────
+
+    let suggestionsBlock = '';
+    const remainingFails = results
+      .map((r, i) => ({ ...r, checkName: names[i], checkId: checkIds[i] }))
+      .filter((r) => !r.pass && r.type !== 'na' && r.type !== 'skipped');
+
+    if (remainingFails.length > 0) {
+      try {
+        const suggestions = await generateFixSuggestions(
+          title,
+          body,
+          remainingFails.map((r) => ({ name: r.checkName, comment: r.comment })),
+          projectKey || 'default',
+        );
+        if (suggestions) {
+          suggestionsBlock = '\n---\n### 🤖 AI-предложения по исправлению\n\n';
+          if (suggestions.suggestedTitle) {
+            suggestionsBlock += `**Заголовок:** \`${suggestions.suggestedTitle}\`\n\n`;
+          }
+          if (suggestions.descriptionFixes) {
+            suggestionsBlock += `**Описание:** ${suggestions.descriptionFixes}\n\n`;
+          }
+          if (suggestions.dodTemplate) {
+            suggestionsBlock += `**Шаблон DoD:**\n${suggestions.dodTemplate}\n\n`;
+          }
+          if (suggestions.decomposition?.length) {
+            suggestionsBlock += `**Декомпозиция:**\n${suggestions.decomposition.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\n`;
+          }
+          if (suggestions.assigneeSuggestion) {
+            suggestionsBlock += `**Исполнитель:** ${suggestions.assigneeSuggestion}\n\n`;
+          }
+        }
+      } catch (err) {
+        console.warn(`[guardian] AI suggestions failed: ${err.message}`);
+      }
+    }
+
+    // ─── Build final comment ──────────────────────────────────────────────
+
     const commentBody = `${MARKER}
 ## 🛡️ Guardian Check — ${projectKey || 'default'}
 
@@ -575,11 +686,11 @@ export async function runGuardian({ issue, projectStatus, comments, resolved, pl
 ${table}
 
 **Вердикт: ${verdict}**
-
+${autoDeadlineBlock}
 ---
 ### 📋 Рекомендация по назначению
 ${routingBlock}
-`;
+${suggestionsBlock}`;
 
     // Update the thinking comment with results
     if (guardianCommentId) {
@@ -589,13 +700,14 @@ ${routingBlock}
     }
 
     // ─── Auto-move to Backlog if blocked (per profile) ────────────────────
+    // Use blockingFailsAfterFix (post-autofix count)
 
     const guardianPaused = process.env.GUARDIAN_PAUSE === 'true';
     if (guardianPaused) {
       console.log(`[guardian] PAUSED — skip auto-move for ${issueKey}`);
     }
 
-    if (!guardianPaused && blockingFails.length > 0 && profile.autoMoveToBacklog && status !== 'Backlog') {
+    if (!guardianPaused && blockingFailsAfterFix.length > 0 && profile.autoMoveToBacklog && status !== 'Backlog') {
       try {
         const moved = await platform.moveToBacklog();
         if (moved) {

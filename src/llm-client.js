@@ -312,6 +312,51 @@ ${candidates.join('\n')}
 }
 
 /**
+ * Generate fix suggestions for a Guardian-blocked issue.
+ * Returns structured suggestions: improved title, description fixes, DoD template,
+ * decomposition into sub-issues, and recommended assignee.
+ *
+ * @param {string} title
+ * @param {string} body
+ * @param {Array<{name: string, comment: string}>} failedChecks — list of failed check names + comments
+ * @param {string} projectKey — project name for context
+ * @returns {Promise<{suggestedTitle?: string, descriptionFixes?: string, dodTemplate?: string, decomposition?: string[], assigneeSuggestion?: string}|null>}
+ */
+export async function generateFixSuggestions(title, body, failedChecks, projectKey) {
+  const failedList = failedChecks.map((c) => `- ${c.name}: ${c.comment}`).join('\n');
+
+  const messages = [
+    {
+      role: 'system',
+      content: `Ты эксперт по kanban и управлению задачами. Задача не прошла проверку Guardian.
+Твоя цель — предложить конкретные исправления, чтобы задача прошла все проверки.
+Отвечай ТОЛЬКО валидным JSON без markdown-обёрток.`,
+    },
+    {
+      role: 'user',
+      content: `Проект: "${projectKey}"
+Заголовок: "${title}"
+Описание: "${body?.slice(0, 1200) || '(пусто)'}"
+
+Непройденные проверки:
+${failedList}
+
+Сформируй JSON с полями (все поля опциональны, включай только те, для которых есть рекомендация):
+{
+  "suggestedTitle": "Улучшенный заголовок (SMART: глагол + объект, без размытых глаголов)",
+  "descriptionFixes": "Что добавить/исправить в описании (конкретный текст)",
+  "dodTemplate": "Готовый шаблон DoD с чекбоксами (- [ ] критерий)",
+  "decomposition": ["Подзадача 1", "Подзадача 2"],
+  "assigneeSuggestion": "Рекомендация по исполнителю и обоснование"
+}`,
+    },
+  ];
+
+  const raw = await callLLM(messages, { maxTokens: 800, temperature: 0.4 });
+  return parseJSON(raw);
+}
+
+/**
  * Ask LLM to analyze issue for /ai command.
  * @param {string} title
  * @param {string} body

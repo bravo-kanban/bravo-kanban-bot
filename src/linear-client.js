@@ -428,6 +428,38 @@ export async function linearGetTeamStates(teamId) {
   }
 }
 
+// ─── Due date ─────────────────────────────────────────────────────────────────
+
+/**
+ * Set the due date on a Linear issue.
+ * @param {string} issueId — Linear issue UUID
+ * @param {string} dueDate — YYYY-MM-DD
+ * @returns {Promise<boolean>}
+ */
+export async function linearSetDueDate(issueId, dueDate) {
+  try {
+    const data = await linearGraphQL(
+      `mutation($issueId: String!, $dueDate: TimelessDate!) {
+        issueUpdate(id: $issueId, input: { dueDate: $dueDate }) {
+          success
+          issue { id dueDate }
+        }
+      }`,
+      { issueId, dueDate },
+    );
+    const result = data?.issueUpdate;
+    if (!result?.success) {
+      console.error('[linear] setDueDate: success=false');
+      return false;
+    }
+    console.log(`[linear] Set dueDate=${dueDate} on issue ${issueId}`);
+    return true;
+  } catch (err) {
+    console.error(`[linear] setDueDate error: ${err.message}`);
+    return false;
+  }
+}
+
 // ─── WIP count ────────────────────────────────────────────────────────────────
 
 /**

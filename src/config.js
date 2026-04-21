@@ -150,6 +150,12 @@ export const GUARDIAN_PROFILES = {
     },
     wipLimit: 3,
     autoMoveToBacklog: true,
+    reviewer: {
+      enabled: true,
+      autoApprove: false,
+      autoReject: true,
+      requireLinkedPR: false,
+    },
   },
 
   // ─── Браво — разработка, строгий режим ─────────────────────────────────
@@ -168,6 +174,12 @@ export const GUARDIAN_PROFILES = {
     },
     wipLimit: 2,
     autoMoveToBacklog: true,
+    reviewer: {
+      enabled: true,
+      autoApprove: false,
+      autoReject: true,
+      requireLinkedPR: true,
+    },
   },
 
   // ─── Клара — аналитика, мягче с DoD ────────────────────────────────────
@@ -186,6 +198,12 @@ export const GUARDIAN_PROFILES = {
     },
     wipLimit: 4,
     autoMoveToBacklog: true,
+    reviewer: {
+      enabled: true,
+      autoApprove: true,
+      autoReject: true,
+      requireLinkedPR: false,
+    },
   },
 
   // ─── Инсайд — аналитика, аналогично Кларе ─────────────────────────────
@@ -204,6 +222,12 @@ export const GUARDIAN_PROFILES = {
     },
     wipLimit: 4,
     autoMoveToBacklog: true,
+    reviewer: {
+      enabled: true,
+      autoApprove: true,
+      autoReject: true,
+      requireLinkedPR: false,
+    },
   },
 
   // ─── ФД — финансовый департамент, строгий режим ────────────────────────
@@ -222,6 +246,12 @@ export const GUARDIAN_PROFILES = {
     },
     wipLimit: 3,
     autoMoveToBacklog: true,
+    reviewer: {
+      enabled: true,
+      autoApprove: false,
+      autoReject: true,
+      requireLinkedPR: false,
+    },
   },
 
   // ─── Head — управление, облегчённый режим ──────────────────────────────
@@ -240,6 +270,12 @@ export const GUARDIAN_PROFILES = {
     },
     wipLimit: 5,
     autoMoveToBacklog: false,
+    reviewer: {
+      enabled: false,
+      autoApprove: false,
+      autoReject: false,
+      requireLinkedPR: false,
+    },
   },
 };
 

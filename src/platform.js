@@ -75,6 +75,23 @@ export function createGitHubAdapter(octokit, graphqlFn, { owner, repo, issueNumb
       console.log('[platform:github] setDueDate not supported on GitHub');
       return false;
     },
+
+    moveToState: async (stateName) => {
+      if (!resolved?.projectId || !resolved?.itemId || !resolved?.statusFieldId) return false;
+      const { getStatusFieldOptions, updateProjectItemStatus } = await import('./github-client.js');
+      try {
+        const options = await getStatusFieldOptions(graphqlFn, resolved.projectId, resolved.statusFieldId);
+        const target = options.find((o) => o.name.toLowerCase() === String(stateName).toLowerCase());
+        if (!target) {
+          console.warn(`[platform:github] moveToState: option '${stateName}' not found`);
+          return false;
+        }
+        return await updateProjectItemStatus(graphqlFn, resolved.projectId, resolved.itemId, resolved.statusFieldId, target.id);
+      } catch (err) {
+        console.warn(`[platform:github] moveToState error: ${err.message}`);
+        return false;
+      }
+    },
   };
 }
 
@@ -123,6 +140,16 @@ export function createLinearAdapter({ issueId, teamId, backlogStateId }) {
     setDueDate: async (dueDate) => {
       const { linearSetDueDate } = await import('./linear-client.js');
       return linearSetDueDate(issueId, dueDate);
+    },
+
+    moveToState: async (stateName) => {
+      const { linearUpdateIssueState, resolveStateIdByName } = await import('./linear-client.js');
+      const stateId = resolveStateIdByName(teamId, stateName);
+      if (!stateId) {
+        console.warn(`[platform:linear] moveToState: can't resolve state '${stateName}' for team ${teamId}`);
+        return false;
+      }
+      return linearUpdateIssueState(issueId, stateId);
     },
   };
 }

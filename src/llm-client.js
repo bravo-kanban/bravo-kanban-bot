@@ -357,6 +357,77 @@ ${failedList}
 }
 
 /**
+ * Reviewer LLM: evaluate whether a task in 'Review' state actually meets its DoD
+ * based on description, DoD checklist and all comments (work log).
+ *
+ * @param {object} params
+ * @param {string} params.title
+ * @param {string} params.body — full issue description
+ * @param {Array<{user?: {name?: string}, body: string, created_at?: string}>} params.comments
+ * @param {string} [params.linkedPRs] — space-separated list of PR URLs/refs found in description or comments
+ * @param {string} [params.projectKey]
+ * @returns {Promise<{verdict: 'approve'|'changes_requested', dodItems?: Array<{criterion: string, done: boolean, evidence?: string}>, missing?: string[], reasoning: string, confidence?: number}|null>}
+ */
+export async function reviewIssueLLM({ title, body, comments, linkedPRs, projectKey }) {
+  // Build a compact comments log (skip bot/service markers, trim long ones)
+  const relevantComments = (comments || [])
+    .filter((c) => {
+      const b = c.body || '';
+      return !b.includes('<!-- guardian-check -->') &&
+             !b.includes('<!-- ai-analysis -->') &&
+             !b.includes('<!-- reviewer -->');
+    })
+    .slice(-25)
+    .map((c, i) => {
+      const author = c.user?.name || c.user?.displayName || 'автор';
+      const date = c.created_at || c.createdAt || '';
+      return `--- comment ${i + 1} — ${author} (${date}) ---\n${(c.body || '').slice(0, 600)}`;
+    })
+    .join('\n\n');
+
+  const messages = [
+    {
+      role: 'system',
+      content: `Ты Reviewer-агент в kanban. Задача переехала в статус "На проверке".
+Твоя цель — проверить, действительно ли каждый пункт Definition of Done выполнен, основываясь
+на описании и комментариях (лог работ). Будь строгим: фразы "готово", "сделано" без доказательств —
+недостаточны. Ищи конкретные артефакты (ссылки на PR, документы, скриншоты, результаты).
+Отвечай ТОЛЬКО валидным JSON без markdown-обёрток.`,
+    },
+    {
+      role: 'user',
+      content: `Проект: "${projectKey || 'default'}"
+Заголовок: "${title}"
+
+Описание и DoD:
+"""
+${(body || '').slice(0, 4000)}
+"""
+
+${linkedPRs ? `Связанные PR/коммиты: ${linkedPRs}\n\n` : ''}Комментарии (лог работы):
+"""
+${relevantComments || '(комментариев нет)'}
+"""
+
+Верни JSON строго в таком формате:
+{
+  "verdict": "approve" | "changes_requested",
+  "dodItems": [
+    { "criterion": "текст пункта DoD", "done": true|false, "evidence": "что именно в комментариях/описании доказывает (или отсутствует)" }
+  ],
+  "missing": ["что именно не доделано"],
+  "reasoning": "короткое обоснование вердикта (1–3 предложения)",
+  "confidence": 0.0-1.0
+}
+Если DoD не найден в описании — обязательно changes_requested с missing=["Отсутствует Definition of Done"].`,
+    },
+  ];
+
+  const raw = await callLLM(messages, { maxTokens: 1200, temperature: 0.2 });
+  return parseJSON(raw);
+}
+
+/**
  * Ask LLM to analyze issue for /ai command.
  * @param {string} title
  * @param {string} body

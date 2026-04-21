@@ -33,6 +33,7 @@ import { resolveLinearProject, resolveBacklogStateId } from './linear-resolver.j
 import { createGitHubAdapter, createLinearAdapter } from './platform.js';
 
 import { runGuardian, isGuardianTrigger } from './guardian.js';
+import { runReviewer, isReviewState } from './reviewer.js';
 import { handleMove, parseMoveCommand } from './move-handler.js';
 import { handleAI, isAICommand } from './ai-handler.js';
 import { handleProtocol, isProtocolLabelAdded, isLinearProtocolIssue, handleLinearProtocol } from './protocol-handler.js';
@@ -595,6 +596,25 @@ async function handleLinearIssueEvent(webhookPayload) {
       resolved,
       platform,
     });
+
+    // ─── Reviewer-агент: запускается при переходе в Review ─────────────────
+    // Условие: изменился stateId ИЛИ это create (задача сразу создана в Review) +
+    // текущее состояние соответствует Review.
+    const stateChanged = webhookPayload.updatedFrom
+      ? Object.prototype.hasOwnProperty.call(webhookPayload.updatedFrom, 'stateId') ||
+        Object.prototype.hasOwnProperty.call(webhookPayload.updatedFrom, 'state')
+      : action === 'create';
+
+    if (stateChanged && isReviewState(stateName)) {
+      console.log(`[linear-webhook] Task entered Review — triggering Reviewer for ${fullIssue.identifier}`);
+      await runReviewer({
+        issue,
+        issueKey: `linear#${fullIssue.identifier}`,
+        comments,
+        projectKey,
+        platform,
+      });
+    }
   } catch (err) {
     console.error(`[linear-webhook] handleLinearIssueEvent error: ${err.message}`, err.stack);
   }

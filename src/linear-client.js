@@ -4,7 +4,57 @@
  * Uses native fetch (Node 20+). All functions read LINEAR_API_KEY from config.
  */
 
-import { LINEAR_API_KEY } from './config.js';
+import { LINEAR_API_KEY, LINEAR_TEAMS } from './config.js';
+
+// Canonical state-name aliases → Linear state types
+// Used by resolveStateIdByName to find a state when team-specific names differ.
+const STATE_NAME_ALIASES = {
+  backlog: ['backlog'],
+  'to do': ['to do', 'todo', 'к выполнению'],
+  'in progress': ['in progress', 'started', 'в работе'],
+  review: ['review', 'in review', 'на проверке', 'проверка'],
+  done: ['done', 'completed', 'готово'],
+  canceled: ['canceled', 'cancelled', 'отменено'],
+};
+
+const STATE_TYPE_BY_ALIAS = {
+  backlog: 'backlog',
+  'to do': 'unstarted',
+  'in progress': 'started',
+  review: 'review',
+  done: 'completed',
+  canceled: 'canceled',
+};
+
+/**
+ * Resolve a Linear state UUID by a human name (case-insensitive, alias-aware).
+ * Looks up LINEAR_TEAMS cache populated on boot.
+ * @param {string} teamId — Linear team UUID
+ * @param {string} stateName — canonical name like 'Review', 'In Progress', 'Done'
+ * @returns {string|null} state UUID or null
+ */
+export function resolveStateIdByName(teamId, stateName) {
+  if (!teamId || !stateName) return null;
+  const teamKey = Object.keys(LINEAR_TEAMS).find((k) => LINEAR_TEAMS[k].id === teamId);
+  const team = teamKey ? LINEAR_TEAMS[teamKey] : null;
+  if (!team?.states) return null;
+
+  const target = stateName.trim().toLowerCase();
+  const aliases = STATE_NAME_ALIASES[target] || [target];
+  const wantedType = STATE_TYPE_BY_ALIAS[target];
+
+  // 1. Try exact name match (case-insensitive) against any alias
+  for (const [name, info] of Object.entries(team.states)) {
+    if (aliases.includes(name.toLowerCase())) return info.id;
+  }
+  // 2. Fallback: match by Linear state type
+  if (wantedType) {
+    for (const info of Object.values(team.states)) {
+      if (info.type === wantedType) return info.id;
+    }
+  }
+  return null;
+}
 
 const LINEAR_ENDPOINT = 'https://api.linear.app/graphql';
 

@@ -494,12 +494,41 @@ function verifyLinearSignature(secret, payload, signature) {
  * Handle Linear issue create/update events.
  * Resolves Guardian profile from team + project, creates Linear adapter, runs Guardian.
  */
+// Fields that should trigger Guardian when changed on an Issue/update event.
+// Any other change (comments, subscribers, sortOrder, reactions, etc.) is ignored.
+const GUARDIAN_RELEVANT_FIELDS = [
+  'title',
+  'description',
+  'stateId',
+  'state',
+  'assigneeId',
+  'assignee',
+  'labelIds',
+  'labels',
+  'dueDate',
+  'priority',
+  'projectId',
+  'project',
+];
+
 async function handleLinearIssueEvent(webhookPayload) {
   try {
-    const { data: issueData, action } = webhookPayload;
+    const { data: issueData, action, updatedFrom } = webhookPayload;
     if (!issueData?.id) {
       console.warn('[linear-webhook] Issue event with no issue ID');
       return;
+    }
+
+    // On Issue/update: only run Guardian if a relevant field changed.
+    // Linear sends Issue/update on every comment/subscriber change too — skip those.
+    if (action === 'update' && updatedFrom && typeof updatedFrom === 'object') {
+      const changedFields = Object.keys(updatedFrom);
+      const hasRelevantChange = changedFields.some((f) => GUARDIAN_RELEVANT_FIELDS.includes(f));
+      if (!hasRelevantChange) {
+        console.log(`[linear-webhook] Skipping Guardian — no relevant fields changed (changed: ${changedFields.join(', ') || 'none'})`);
+        return;
+      }
+      console.log(`[linear-webhook] Relevant changes detected: ${changedFields.filter((f) => GUARDIAN_RELEVANT_FIELDS.includes(f)).join(', ')}`);
     }
 
     // Fetch full issue data from API (webhook data may be partial)

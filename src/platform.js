@@ -153,3 +153,54 @@ export function createLinearAdapter({ issueId, teamId, backlogStateId }) {
     },
   };
 }
+
+// ─── Huly adapter ─────────────────────────────────────────────────────────────
+
+/**
+ * Create a platform adapter backed by the Huly Platform API.
+ * The /ai handler only uses postComment/updateComment, so we implement those
+ * properly and stub out the Guardian-only methods.
+ *
+ * @param {object} ctx
+ * @param {object} ctx.issue — Huly Issue doc (must have _id, space, identifier)
+ * @param {object} [ctx.project] — Huly Project doc (optional, for moveToState)
+ * @returns {object} platform adapter
+ */
+export function createHulyAdapter({ issue, project }) {
+  return {
+    platform: 'huly',
+    issueKey: `huly#${issue?.identifier || issue?._id}`,
+
+    postComment: async (body) => {
+      const { postIssueComment } = await import('./huly-client.js');
+      return postIssueComment(issue, body);
+    },
+
+    updateComment: async (_commentId, _body) => {
+      // Huly chat-message edits go through updateCollection; for the /ai flow
+      // we always create a new comment, so this is a no-op.
+      return false;
+    },
+
+    getComments: async () => {
+      const { listIssueComments, markupToPlainText } = await import('./huly-client.js');
+      const comments = await listIssueComments(issue);
+      return comments.map((c) => ({
+        id: c._id,
+        body: markupToPlainText(c.message),
+        user: { name: c.createdBy || 'huly-user' },
+        created_at: c.createdOn ? new Date(c.createdOn).toISOString() : null,
+      }));
+    },
+
+    moveToBacklog: async () => false,
+    countInProgress: async () => 0,
+    setDueDate: async () => false,
+
+    moveToState: async (stateName) => {
+      if (!project) return false;
+      const { moveIssueToStatus } = await import('./huly-client.js');
+      return moveIssueToStatus(issue, project, stateName);
+    },
+  };
+}

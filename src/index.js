@@ -25,6 +25,9 @@ import {
   LINEAR_API_KEY,
   LINEAR_WEBHOOK_SECRET,
   LINEAR_ENABLED,
+  HULY_ENABLED,
+  HULY_URL,
+  HULY_WORKSPACE,
   setProjectConfig,
   setLinearTeams,
 } from './config.js';
@@ -763,6 +766,14 @@ async function bootstrap() {
     }
   }
 
+  // Bootstrap Huly worker — no-op unless HULY_URL/WORKSPACE/credentials set
+  try {
+    const { startHulyWorker } = await import('./huly-worker.js');
+    await startHulyWorker();
+  } catch (err) {
+    console.warn(`[boot] Could not start Huly worker: ${err.message}`);
+  }
+
   server.listen(PORT, () => {
     console.log(`[boot] bravo-kanban-bot listening on port ${PORT}`);
     console.log(`[boot] Webhook endpoints: POST /github-app, POST /linear-webhook`);
@@ -777,6 +788,11 @@ async function bootstrap() {
       console.log(`[boot] Linear: ENABLED (key: ${LINEAR_API_KEY.slice(0, 8)}…)`);
     } else {
       console.log('[boot] Linear: DISABLED (no LINEAR_API_KEY)');
+    }
+    if (HULY_ENABLED) {
+      console.log(`[boot] Huly: ENABLED (url: ${HULY_URL}, workspace: ${HULY_WORKSPACE})`);
+    } else {
+      console.log('[boot] Huly: DISABLED (HULY_URL / HULY_WORKSPACE / credentials not set)');
     }
   });
 }

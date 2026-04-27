@@ -22,6 +22,35 @@ export const AI_API_KEY = process.env.AI_API_KEY || process.env.OPENROUTER_API_K
 
 export const WIP_LIMIT = parseInt(process.env.WIP_LIMIT || '3', 10);
 
+// ─── Huly ────────────────────────────────────────────────────────────────────
+
+export const HULY_URL = process.env.HULY_URL || '';
+export const HULY_WORKSPACE = process.env.HULY_WORKSPACE || '';
+export const HULY_EMAIL = process.env.HULY_EMAIL || '';
+export const HULY_PASSWORD = process.env.HULY_PASSWORD || '';
+export const HULY_TOKEN = process.env.HULY_TOKEN || '';
+
+// Optional: comma-separated project identifiers (e.g. "BRAVO,CLARA"). When
+// empty the worker runs across every project the service account can see.
+export const HULY_PROJECT_IDENTIFIERS = (process.env.HULY_PROJECT_IDENTIFIERS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+// Status names the user actually has on the board. Workflow:
+//   AI - to do  →  AI processes  →  posts comment  →  AI - done
+export const HULY_STATUS_TODO = process.env.HULY_STATUS_TODO || 'AI - to do';
+export const HULY_STATUS_DONE = process.env.HULY_STATUS_DONE || 'AI - done';
+
+// Poll cadence (Huly has no public webhook, so we poll). Defaults are friendly
+// to a self-hosted Huly: 30s status sweep, 20s comment sweep.
+export const HULY_POLL_STATUS_MS = parseInt(process.env.HULY_POLL_STATUS_MS || '30000', 10);
+export const HULY_POLL_COMMENTS_MS = parseInt(process.env.HULY_POLL_COMMENTS_MS || '20000', 10);
+
+export const HULY_ENABLED = !!(
+  HULY_URL && HULY_WORKSPACE && (HULY_TOKEN || (HULY_EMAIL && HULY_PASSWORD))
+);
+
 // ─── Linear ──────────────────────────────────────────────────────────────────
 
 export const LINEAR_API_KEY = process.env.LINEAR_API_KEY || '';

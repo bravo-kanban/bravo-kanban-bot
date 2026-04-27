@@ -27,6 +27,7 @@ GitHub App-бот для организации **bravo-kanban**. Автомат
 | 🚦 **`/move`** | Перевод задачи между статусами с валидацией условий |
 | 🤖 **`/ai`** | AI-анализ задачи: приоритет, тип, сложность, резюме |
 | 🧠 **LLM** | Расширенные проверки через OpenRouter (опционально) |
+| 🟣 **Huly AI** | Автоматизация в Huly: статус `AI - to do` → ответ AI → `AI - done`; команды `/ai`, `/ai plan`, `/ai risks` и т.д. в комментариях |
 
 ---
 
@@ -365,6 +366,65 @@ npm run dev
 
 ```bash
 npx smee-client --url https://smee.io/your-channel --path /github-app --port 3000
+```
+
+---
+
+## Huly AI automation (опционально)
+
+Бот умеет выполнять две AI-автоматизации в Huly. Обе работают в каждом
+проекте, к которому имеет доступ сервисный аккаунт; никакого web-hook'а Huly
+не требуется — используется long-poll через WebSocket.
+
+### Что делает бот
+
+| Триггер | Что происходит |
+|---|---|
+| Задача переведена в статус **AI - to do** | Бот зачитывает заголовок и описание, прогоняет через AI, постит markdown-комментарий с ответом и переводит задачу в статус **AI - done**. |
+| Любой комментарий, начинающийся на `/ai` | Бот отвечает в этой же задаче. Поддерживаются преднастроенные команды `/ai summarize`, `/ai plan`, `/ai risks`, `/ai draft`, `/ai review`, а также свободный вопрос вида `/ai <ваш вопрос>`. |
+
+Других статусов создавать не нужно — достаточно `AI - to do` и `AI - done`.
+
+### Что нужно подготовить в Huly
+
+1. Завести сервисного пользователя (например `bot@bravo`), пригласить его в нужные workspace и проекты.
+2. В каждом проекте, где должна работать автоматизация, добавить в воркфлоу два статуса: **AI - to do** и **AI - done**. Капитализация и пробелы должны совпадать (или переопределите имена через `HULY_STATUS_TODO` / `HULY_STATUS_DONE` — но при стандартной настройке делать этого не нужно).
+3. Убедиться, что у сервисного пользователя есть права читать issues и писать комментарии.
+
+### Конфигурация на сервере
+
+В `.env`:
+
+```env
+HULY_URL=https://huly.app          # или адрес self-hosted Huly
+HULY_WORKSPACE=my-workspace        # имя workspace из URL: https://huly.app/workbench/<workspace>
+HULY_EMAIL=bot@example.com
+HULY_PASSWORD=secret
+# HULY_TOKEN=...                   # альтернатива email+password
+# HULY_PROJECT_IDENTIFIERS=BRAVO,CLARA   # ограничить список проектов (по умолчанию — все)
+```
+
+Если ни одна `HULY_*` переменная не задана — Huly-модуль просто не запускается, остальной бот работает как раньше.
+
+### Проверка соединения
+
+```bash
+npm run huly:test
+```
+
+Скрипт подключается к Huly, печатает список видимых проектов и для каждого показывает, найдены ли статусы `AI - to do` / `AI - done` и сколько задач сейчас стоит в `AI - to do`.
+
+### Как обновить сервер с этой ветки
+
+```bash
+# на сервере, в директории бота:
+git fetch origin
+git checkout feature/huly-ai-automation
+git pull origin feature/huly-ai-automation
+npm install                  # подтянет @hcengineering/api-client
+# дописать HULY_* переменные в /opt/bravo-kanban/config/.env (или ваш путь)
+npm run huly:test            # проверить, что Huly виден
+docker-compose up -d --build # или systemctl restart bravo-kanban-bot
 ```
 
 ---
